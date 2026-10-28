@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 import httpx
 import uvicorn
@@ -55,12 +56,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+LEGACY_INDEX = BASE_DIR / "templates" / "index.html"
+
+# Mount frontend assets if compiled React bundle exists
+if (FRONTEND_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="frontend_assets")
+
 # Serve the Swargaseema AI Telephony Console UI
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
-    index_file = BASE_DIR / "templates" / "index.html"
-    if index_file.exists():
-        return HTMLResponse(content=index_file.read_text(encoding="utf-8"))
+    if FRONTEND_INDEX.exists():
+        return HTMLResponse(content=FRONTEND_INDEX.read_text(encoding="utf-8"))
+    if LEGACY_INDEX.exists():
+        return HTMLResponse(content=LEGACY_INDEX.read_text(encoding="utf-8"))
     return HTMLResponse(content="<h1>UI Template Not Found</h1>", status_code=404)
 
 # Health status endpoint

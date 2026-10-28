@@ -111,11 +111,27 @@ MONGO_DB_NAME=rag-bot_test
 MONGO_COLLECTION_NAME=vobiz_ai_calls
 ```
 
-### 3. Run the Server
+### 3. Run Frontend & Backend Together
+
+You can start both the FastAPI backend (port 8000) and the Vite React frontend (port 3000) with a single command from the project root:
 
 ```bash
-python server.py
+npm run dev
 ```
+
+Or using the Python runner:
+
+```bash
+python run.py
+```
+
+### 4. Build Frontend for Production
+
+```bash
+npm run build
+```
+
+Once built, running `python server.py` serves the compiled React dashboard directly from FastAPI at `http://localhost:8000`.
 
 The application exposes:
 - `GET /health`: Health and public URL check.
