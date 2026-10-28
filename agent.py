@@ -23,7 +23,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
 from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService, GeminiVADParams
-from pipecat.services.llm_service import FunctionCallParams
+from pipecat.services.llm_service import FunctionCallParams, FunctionCallResultProperties
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
@@ -115,9 +115,15 @@ async def run_vobiz_agent(
 
     task_ref: List[Optional[PipelineTask]] = [None]
     hangup_timer: List[Optional[asyncio.Task]] = [None]
+    call_ended = False
 
     # Handler for end_call tool invoked by Gemini
     async def handle_end_call(params: FunctionCallParams) -> None:
+        nonlocal call_ended
+        if call_ended:
+            return
+        call_ended = True
+
         args = params.arguments or {}
         disposition = args.get("disposition", "not_talking")
         customer_name = args.get("customer_name")
@@ -141,7 +147,10 @@ async def run_vobiz_agent(
             reason=reason,
         )
 
-        await params.result_callback({"status": "success"})
+        await params.result_callback(
+            {"status": "call_concluded"},
+            properties=FunctionCallResultProperties(run_llm=False),
+        )
 
         # Allow final goodbye speech to reach caller before stopping pipeline
         async def delayed_terminate():
