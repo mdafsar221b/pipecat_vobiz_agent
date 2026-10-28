@@ -1,0 +1,49 @@
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Byte-compiled / optimized / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Binary executables
+*.exe
+cloudflared.exe
+*.dll
+*.so
+*.dylib
+
+# Application logs & diagnostic traces
+logs/
+*.log
+*.jsonl
+
+# IDE & Editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Database & temp
+*.sqlite
+*.sqlite3
+tmp/
+temp/
+scratch/

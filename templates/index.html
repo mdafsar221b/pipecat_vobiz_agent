@@ -1,0 +1,1905 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Swargaseema AI Telephony - Outbound Campaign Console</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --surface-hover: #f1f5f9;
+      --border: #e2e8f0;
+      --border-focus: #2563eb;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --success: #059669;
+      --success-bg: rgba(5, 150, 105, 0.08);
+      --warning: #d97706;
+      --warning-bg: rgba(217, 119, 6, 0.08);
+      --danger: #dc2626;
+      --danger-bg: rgba(220, 38, 38, 0.08);
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      box-shadow: none !important;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      line-height: 1.45;
+      padding: 16px 20px;
+    }
+    .top-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--text);
+    }
+    .brand-subtitle {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+    .header-pills {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .pill {
+      font-size: 0.72rem;
+      font-family: var(--mono);
+      padding: 3px 8px;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-muted);
+    }
+    .pill-status {
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .pill-status.idle {
+      border-color: #cbd5e1;
+      color: #64748b;
+      background: #f1f5f9;
+    }
+    .pill-status.running {
+      border-color: #059669;
+      color: #047857;
+      background: var(--success-bg);
+    }
+    .pill-status.paused {
+      border-color: #d97706;
+      color: #b45309;
+      background: var(--warning-bg);
+    }
+    .alert-banner {
+      display: none;
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin-bottom: 14px;
+      font-size: 0.8rem;
+      border: 1px solid var(--danger);
+      background: var(--danger-bg);
+      color: #991b1b;
+    }
+    .layout-grid {
+      display: grid;
+      grid-template-columns: 430px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 1024px) {
+      .layout-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-title {
+      font-size: 0.82rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text);
+    }
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .kpi-box {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      padding: 6px 4px;
+      border-radius: 3px;
+      text-align: center;
+      min-width: 0;
+    }
+    .kpi-num {
+      display: block;
+      font-size: 1.05rem;
+      font-weight: 700;
+      font-family: var(--mono);
+      line-height: 1.1;
+      color: var(--text);
+    }
+    .kpi-lbl {
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: block;
+    }
+    .btn-group {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .btn {
+      padding: 7px 10px;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+    }
+    .btn-primary:hover {
+      background: var(--primary-hover);
+    }
+    .btn-success {
+      background: var(--success);
+      color: #fff;
+    }
+    .btn-success:hover {
+      background: #047857;
+    }
+    .btn-warning {
+      background: var(--warning);
+      color: #fff;
+    }
+    .btn-warning:hover {
+      background: #b45309;
+    }
+    .btn-danger {
+      background: var(--danger);
+      color: #fff;
+    }
+    .btn-danger:hover {
+      background: #b91c1c;
+    }
+    .btn-secondary {
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      color: #334155;
+    }
+    .btn-secondary:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+    }
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .live-hud {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      display: block;
+    }
+    .live-hud-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .live-badge {
+      font-size: 0.7rem;
+      font-weight: 700;
+      font-family: var(--mono);
+      color: #1d4ed8;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #2563eb;
+      display: inline-block;
+      animation: pulseDot 1.4s infinite ease-in-out;
+    }
+    @keyframes pulseDot {
+      0% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.35; transform: scale(1.25); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+    .live-timer {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #1e40af;
+    }
+    .live-phone {
+      font-family: var(--mono);
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 2px;
+    }
+    .live-meta {
+      font-size: 0.72rem;
+      color: #475569;
+      margin-bottom: 8px;
+    }
+    .transcript-feed {
+      max-height: 140px;
+      overflow-y: auto;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 3px;
+      padding: 8px;
+      font-size: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .transcript-turn {
+      padding: 4px 8px;
+      border-radius: 2px;
+      line-height: 1.35;
+    }
+    .turn-agent {
+      background: rgba(37, 99, 235, 0.06);
+      border-left: 2px solid #2563eb;
+    }
+    .turn-caller, .turn-customer {
+      background: rgba(5, 150, 105, 0.06);
+      border-left: 2px solid #059669;
+    }
+    .turn-lbl {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 2px;
+    }
+    .turn-lbl.agent { color: #1d4ed8; }
+    .turn-lbl.caller, .turn-lbl.customer { color: #047857; }
+    .next-call-card {
+      background: #f8fafc;
+      border: 1px dashed #cbd5e1;
+      border-radius: 3px;
+      padding: 8px 10px;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .next-call-lbl {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    .next-call-phone {
+      font-family: var(--mono);
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: #1d4ed8;
+    }
+    .filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .input-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .input-label {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    input[type="date"], input[type="text"], select {
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      color: var(--text);
+      font-size: 0.78rem;
+      padding: 5px 8px;
+      border-radius: 3px;
+      outline: none;
+      font-family: var(--font);
+    }
+    input[type="date"]:focus, input[type="text"]:focus, select:focus {
+      border-color: var(--border-focus);
+    }
+    .table-container {
+      overflow-x: auto;
+      max-height: 480px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      background: #ffffff;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.75rem;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      background: #f8fafc;
+      color: var(--text-muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    td {
+      padding: 7px 10px;
+      border-bottom: 1px solid #f1f5f9;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    tr:hover td {
+      background: #f8fafc;
+    }
+    .tag {
+      font-size: 0.68rem;
+      padding: 2px 6px;
+      border-radius: 2px;
+      font-family: var(--mono);
+      font-weight: 500;
+    }
+    .tag-interested {
+      background: rgba(5, 150, 105, 0.08);
+      border: 1px solid #059669;
+      color: #047857;
+    }
+    .tag-declined {
+      background: rgba(220, 38, 38, 0.08);
+      border: 1px solid #dc2626;
+      color: #b91c1c;
+    }
+    .tag-noanswer {
+      background: rgba(217, 119, 6, 0.08);
+      border: 1px solid #d97706;
+      color: #b45309;
+    }
+    .tag-pending {
+      background: rgba(37, 99, 235, 0.08);
+      border: 1px solid #3b82f6;
+      color: #1d4ed8;
+    }
+    .tag-dialing {
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid #f59e0b;
+      color: #b45309;
+    }
+    .tag-completed {
+      background: #f1f5f9;
+      border: 1px solid #cbd5e1;
+      color: #475569;
+    }
+    .tab-bar {
+      display: flex;
+      gap: 2px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+    .tab-btn {
+      padding: 6px 14px;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      color: var(--text);
+      border-bottom-color: var(--primary);
+    }
+    .log-item {
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .log-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .log-phone {
+      font-family: var(--mono);
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: var(--text);
+    }
+    .log-details {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+    audio {
+      width: 100%;
+      height: 28px;
+      margin-top: 4px;
+    }
+    .batch-card {
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    .batch-card:hover {
+      background: #f8fafc;
+      border-color: #94a3b8;
+    }
+    .batch-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .batch-title {
+      font-weight: 700;
+      font-size: 0.88rem;
+      color: var(--text);
+    }
+    .batch-meta {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    .batch-kpis {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .batch-pill {
+      font-size: 0.7rem;
+      font-family: var(--mono);
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 3px;
+      background: #f1f5f9;
+      color: #475569;
+      border: 1px solid #e2e8f0;
+    }
+    .batch-pill.interested { background: rgba(5, 150, 105, 0.08); color: #047857; border-color: rgba(5, 150, 105, 0.2); }
+    .batch-pill.declined { background: rgba(220, 38, 38, 0.08); color: #b91c1c; border-color: rgba(220, 38, 38, 0.2); }
+    .batch-pill.wrong { background: rgba(124, 58, 237, 0.08); color: #7c3aed; border-color: rgba(124, 58, 237, 0.2); }
+    .batch-pill.silent { background: rgba(234, 88, 12, 0.08); color: #c2410c; border-color: rgba(234, 88, 12, 0.2); }
+    .batch-pill.noanswer { background: #f1f5f9; color: #64748b; border-color: #cbd5e1; }
+  </style>
+</head>
+<body>
+
+  <header class="top-header">
+    <div>
+      <div class="brand-title">Swargaseema AI Telephony Console</div>
+      <div class="brand-subtitle">Automated Outbound Calling &amp; Qualification Engine</div>
+    </div>
+    <div class="header-pills">
+      <span class="pill pill-status idle" id="campaignStatusPill">OBD: Idle</span>
+      <span class="pill" id="vobizDidPill">DID: Loading...</span>
+      <span class="pill" id="carrierChannelPill">Channels: 1 Active</span>
+    </div>
+  </header>
+
+  <div id="alertBanner" class="alert-banner"></div>
+
+  <div class="layout-grid">
+
+    <!-- Left Column: Campaign Orchestration & Live Call HUD -->
+    <div>
+
+      <!-- Live Call Monitor -->
+      <div class="live-hud" id="liveHud">
+        <div class="live-hud-top">
+          <span class="live-badge"><span class="dot" id="hudDot" style="background: #94a3b8; animation: none;"></span> <span id="hudPhase" style="color: #64748b;">IDLE</span></span>
+          <span class="live-timer" id="hudTimer" style="color: #64748b;">--:--</span>
+        </div>
+        <div class="live-phone" id="hudPhone" style="color: var(--text-muted); font-size: 0.9rem;">No active call in progress</div>
+        <div class="live-meta" id="hudMeta">Dialer is idle. Start OBD or trigger a single test dial.</div>
+        <div class="transcript-feed" id="hudTranscript">
+          <div style="color: var(--text-muted); font-size: 0.72rem; padding: 4px;">Awaiting active call session...</div>
+        </div>
+      </div>
+
+      <!-- Next Call Preview -->
+      <div class="next-call-card" id="nextCallCard">
+        <div>
+          <div class="next-call-lbl">Next In Queue</div>
+          <div class="next-call-phone" id="nextCallPhone">No pending calls queued</div>
+        </div>
+        <div id="nextCallMeta" style="font-size: 0.7rem; color: var(--text-muted); text-align: right;">--</div>
+      </div>
+
+      <!-- Campaign Controller Panel -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Automated Dialer Controls</span>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button id="btnRetryOnly" title="Reset retries for failed/unanswered calls" style="background: none; border: none; color: #2563eb; font-size: 0.68rem; cursor: pointer; text-decoration: underline; padding: 0;">Retry Failed</button>
+            <span id="queueProgress" style="font-size: 0.72rem; color: var(--text-muted); font-family: var(--mono);">0 / 0</span>
+          </div>
+        </div>
+
+        <div class="kpi-row">
+          <div class="kpi-box">
+            <span class="kpi-num" id="kpiTotal">0</span>
+            <span class="kpi-lbl">Total</span>
+          </div>
+          <div class="kpi-box">
+            <span class="kpi-num" id="kpiPending" style="color: #2563eb;">0</span>
+            <span class="kpi-lbl">Pending</span>
+          </div>
+          <div class="kpi-box">
+            <span class="kpi-num" id="kpiActive" style="color: #d97706;">0</span>
+            <span class="kpi-lbl">Active</span>
+          </div>
+          <div class="kpi-box">
+            <span class="kpi-num" id="kpiInterested" style="color: #059669;">0</span>
+            <span class="kpi-lbl">Interested</span>
+          </div>
+          <div class="kpi-box">
+            <span class="kpi-num" id="kpiDeclined" style="color: #dc2626;">0</span>
+            <span class="kpi-lbl">Not Interested</span>
+          </div>
+          <div class="kpi-box">
+            <span class="kpi-num" id="kpiWrongNumber" style="color: #7c3aed;">0</span>
+            <span class="kpi-lbl">Wrong Number</span>
+          </div>
+          <div class="kpi-box">
+            <span class="kpi-num" id="kpiNotTalking" style="color: #ea580c;">0</span>
+            <span class="kpi-lbl">Not Talking</span>
+          </div>
+          <div class="kpi-box">
+            <span class="kpi-num" id="kpiNoAnswer" style="color: #64748b;">0</span>
+            <span class="kpi-lbl">No Answer</span>
+          </div>
+          <div class="kpi-box">
+            <span class="kpi-num" id="kpiDropped" style="color: #e11d48;">0</span>
+            <span class="kpi-lbl">Dropped</span>
+          </div>
+        </div>
+
+        <div class="btn-group">
+          <button class="btn btn-success" id="btnStartCamp">Start OBD</button>
+          <button class="btn btn-warning" id="btnPauseCamp" disabled>Pause</button>
+          <button class="btn btn-danger" id="btnStopCamp" disabled>Stop</button>
+          <button class="btn btn-secondary" id="btnClearQueue" title="Clear all leads from active queue and reset counters to start fresh">Reset Queue</button>
+        </div>
+
+        <!-- Manual Single Dial -->
+        <div style="border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Single Test Dial</span>
+            <span id="manualDialStatusTag" style="font-size: 0.7rem; font-family: var(--mono); font-weight: 600; display: none;"></span>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <input type="text" id="manualPhoneInput" placeholder="+91XXXXXXXXXX" value="+917007173798" style="flex: 1;">
+            <button class="btn btn-primary" id="btnManualDial" style="white-space: nowrap;">Dial</button>
+          </div>
+          <div id="manualDialFeedback" style="font-size: 0.72rem; margin-top: 6px; color: var(--text-muted); display: none;"></div>
+        </div>
+
+        <!-- Predefined Test Contacts Batch -->
+        <div style="border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">
+              Test Batch Contacts (<span id="testContactsCount">6</span>/<span id="testContactsTotal">6</span>)
+            </span>
+            <button type="button" id="btnToggleAllTestContacts" style="font-size: 0.68rem; color: #2563eb; background: none; border: none; cursor: pointer; padding: 0; font-weight: 500;">
+              Deselect All
+            </button>
+          </div>
+
+          <div id="testContactsList" style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px;">
+            <!-- Predefined contacts rendered via script -->
+          </div>
+
+          <div style="display: flex; gap: 6px;">
+            <button class="btn btn-primary" id="btnStartTestBatch" style="flex: 1; font-size: 0.74rem; padding: 7px 10px; font-weight: 600;">
+              Start Test Batch (<span id="testBatchBtnCount">6</span>)
+            </button>
+            <button class="btn btn-secondary" id="btnQueueTestBatchOnly" style="font-size: 0.72rem; padding: 7px 8px;" title="Queue contacts into dialer without starting immediately">
+              Queue Only
+            </button>
+          </div>
+          <div id="testBatchFeedback" style="font-size: 0.7rem; margin-top: 6px; color: var(--text-muted); display: none;"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Right Column: CRM Pending Calls List & Completed Transcripts -->
+    <div>
+      <div class="panel">
+
+        <div class="tab-bar">
+          <button class="tab-btn active" id="tabPendingBtn">CRM Missed Calls (Pending Queue)</button>
+          <button class="tab-btn" id="tabBatchesBtn">Campaign Batches</button>
+          <button class="tab-btn" id="tabCompletedBtn">Completed Calls &amp; Transcripts</button>
+        </div>
+
+        <!-- TAB 1: CRM Pending Calls -->
+        <div id="tabPendingContent">
+          <!-- Filter Controls -->
+          <div class="filter-bar">
+            <div class="input-group">
+              <span class="input-label">From:</span>
+              <input type="date" id="filterStartDate" value="2026-10-27">
+            </div>
+            <div class="input-group">
+              <span class="input-label">To:</span>
+              <input type="date" id="filterEndDate" value="2026-10-27">
+            </div>
+            <div style="display: flex; gap: 4px;">
+              <button class="btn btn-secondary" id="btnQuickToday" style="padding: 4px 8px; font-size: 0.72rem;">Today</button>
+              <button class="btn btn-secondary" id="btnQuickYesterday" style="padding: 4px 8px; font-size: 0.72rem;">Yesterday</button>
+            </div>
+            <input type="text" id="filterSearchInput" placeholder="Filter by phone or campaign..." style="width: 170px;">
+            <label style="display: flex; align-items: center; gap: 5px; font-size: 0.75rem; color: var(--text); cursor: pointer; user-select: none; margin: 0 4px; white-space: nowrap;">
+              <input type="checkbox" id="chkUniqueOnly" checked>
+              <span>Unique numbers only</span>
+            </label>
+            <button class="btn btn-primary" id="btnApplyFilter">Fetch Calls</button>
+            <button class="btn btn-success" id="btnQueueAllFiltered" style="margin-left: auto;">Queue All to Dialer</button>
+          </div>
+
+          <!-- Pending Calls Table -->
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 30px;"><input type="checkbox" id="selectAllCheckbox" checked></th>
+                  <th>Customer Number</th>
+                  <th>Customer Name</th>
+                  <th>Marketing Source</th>
+                  <th>Missed Agent</th>
+                  <th>Missed Time</th>
+                  <th>Ring</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="pendingTableBody">
+                <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 24px;">Click 'Fetch Calls' to load pending missed calls from CRM...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 0.72rem; color: var(--text-muted);">
+            <span id="crmFetchedCount">Showing 0 calls</span>
+            <span>Real CRM: realestate_db</span>
+          </div>
+        </div>
+
+        <!-- TAB 2: Campaign Batches History & Drilldown -->
+        <div id="tabBatchesContent" style="display: none;">
+          <!-- View A: List of Batches -->
+          <div id="batchesListView">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <div>
+                <span style="font-size: 0.82rem; font-weight: 700; text-transform: uppercase; color: var(--text);">Campaign Batches History</span>
+                <span style="font-size: 0.72rem; color: var(--text-muted); margin-left: 8px;">Breakdown of launched batches and performance</span>
+              </div>
+              <button class="btn btn-secondary" id="btnRefreshBatches" style="font-size: 0.72rem; padding: 4px 8px;">Refresh Batches</button>
+            </div>
+            <div id="batchesContainer" style="max-height: 500px; overflow-y: auto;">
+              <div style="text-align: center; padding: 32px; color: var(--text-muted);">No campaign batches recorded yet.</div>
+            </div>
+          </div>
+
+          <!-- View B: Batch Detail Drill-down -->
+          <div id="batchDetailView" style="display: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border);">
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <button class="btn btn-secondary" id="btnBackToBatches" style="font-size: 0.72rem; padding: 4px 8px;">&larr; Back to Batches</button>
+                <div style="font-weight: 700; font-size: 0.85rem;" id="batchDetailTitle">Batch Detail</div>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <span id="batchDetailStatusBadge" class="pill pill-status idle">COMPLETED</span>
+                <button class="btn btn-danger" id="btnDeleteBatch" style="font-size: 0.7rem; padding: 3px 8px;">Delete Batch</button>
+              </div>
+            </div>
+
+            <div id="batchDetailKpiRow" class="kpi-row" style="margin-bottom: 12px;">
+              <!-- Dynamic batch KPI boxes -->
+            </div>
+
+            <div style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;">
+              Calls in this Batch (<span id="batchCallsCount">0</span>)
+            </div>
+            <div id="batchCallsListContainer" style="max-height: 420px; overflow-y: auto;">
+              <!-- Dynamic calls list with audio player, transcript, and disposition -->
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 3: Completed Calls & Transcripts History -->
+        <div id="tabCompletedContent" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Turn-by-turn conversations and outcomes from Ananya</span>
+            <button class="btn btn-secondary" id="btnRefreshLogs" style="padding: 4px 10px; font-size: 0.72rem;">Refresh History</button>
+          </div>
+          <div id="completedLogsContainer" style="max-height: 480px; overflow-y: auto;">
+            <div style="text-align: center; padding: 32px; color: var(--text-muted);">Loading completed call logs...</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // State
+    let crmCalls = [];
+    let isCampaignPaused = false;
+    let pollInterval = null;
+    let wasCallActive = false;
+
+    // Elements
+    const alertBanner = document.getElementById('alertBanner');
+    const campaignStatusPill = document.getElementById('campaignStatusPill');
+    const vobizDidPill = document.getElementById('vobizDidPill');
+    const liveHud = document.getElementById('liveHud');
+    const hudDot = document.getElementById('hudDot');
+    const hudPhase = document.getElementById('hudPhase');
+    const hudTimer = document.getElementById('hudTimer');
+    const hudPhone = document.getElementById('hudPhone');
+    const hudMeta = document.getElementById('hudMeta');
+    const hudTranscript = document.getElementById('hudTranscript');
+    const nextCallCard = document.getElementById('nextCallCard');
+    const nextCallPhone = document.getElementById('nextCallPhone');
+    const nextCallMeta = document.getElementById('nextCallMeta');
+
+    const kpiTotal = document.getElementById('kpiTotal');
+    const kpiPending = document.getElementById('kpiPending');
+    const kpiActive = document.getElementById('kpiActive');
+    const kpiInterested = document.getElementById('kpiInterested');
+    const kpiDeclined = document.getElementById('kpiDeclined');
+    const kpiWrongNumber = document.getElementById('kpiWrongNumber');
+    const kpiNotTalking = document.getElementById('kpiNotTalking');
+    const kpiNoAnswer = document.getElementById('kpiNoAnswer');
+    const kpiDropped = document.getElementById('kpiDropped');
+    const queueProgress = document.getElementById('queueProgress');
+
+    const btnStartCamp = document.getElementById('btnStartCamp');
+    const btnPauseCamp = document.getElementById('btnPauseCamp');
+    const btnStopCamp = document.getElementById('btnStopCamp');
+    const btnClearQueue = document.getElementById('btnClearQueue');
+    const btnRetryOnly = document.getElementById('btnRetryOnly');
+    const btnManualDial = document.getElementById('btnManualDial');
+    const manualPhoneInput = document.getElementById('manualPhoneInput');
+    const manualDialStatusTag = document.getElementById('manualDialStatusTag');
+    const manualDialFeedback = document.getElementById('manualDialFeedback');
+
+    const filterStartDate = document.getElementById('filterStartDate');
+    const filterEndDate = document.getElementById('filterEndDate');
+    const filterSearchInput = document.getElementById('filterSearchInput');
+    const chkUniqueOnly = document.getElementById('chkUniqueOnly');
+    const btnApplyFilter = document.getElementById('btnApplyFilter');
+    const btnQueueAllFiltered = document.getElementById('btnQueueAllFiltered');
+    const pendingTableBody = document.getElementById('pendingTableBody');
+    const crmFetchedCount = document.getElementById('crmFetchedCount');
+    const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+
+    const tabPendingBtn = document.getElementById('tabPendingBtn');
+    const tabBatchesBtn = document.getElementById('tabBatchesBtn');
+    const tabCompletedBtn = document.getElementById('tabCompletedBtn');
+    const tabPendingContent = document.getElementById('tabPendingContent');
+    const tabBatchesContent = document.getElementById('tabBatchesContent');
+    const tabCompletedContent = document.getElementById('tabCompletedContent');
+    const batchesListView = document.getElementById('batchesListView');
+    const batchDetailView = document.getElementById('batchDetailView');
+    const batchesContainer = document.getElementById('batchesContainer');
+    const btnRefreshBatches = document.getElementById('btnRefreshBatches');
+    const btnBackToBatches = document.getElementById('btnBackToBatches');
+    const batchDetailTitle = document.getElementById('batchDetailTitle');
+    const batchDetailStatusBadge = document.getElementById('batchDetailStatusBadge');
+    const batchDetailKpiRow = document.getElementById('batchDetailKpiRow');
+    const batchCallsCount = document.getElementById('batchCallsCount');
+    const batchCallsListContainer = document.getElementById('batchCallsListContainer');
+    const completedLogsContainer = document.getElementById('completedLogsContainer');
+    const btnRefreshLogs = document.getElementById('btnRefreshLogs');
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function showAlert(msg) {
+      if (!msg) {
+        alertBanner.style.display = 'none';
+        return;
+      }
+      alertBanner.textContent = msg;
+      alertBanner.style.display = 'block';
+    }
+
+    // Tabs
+    function selectTab(tab) {
+      tabPendingBtn.classList.toggle('active', tab === 'pending');
+      tabBatchesBtn.classList.toggle('active', tab === 'batches');
+      tabCompletedBtn.classList.toggle('active', tab === 'completed');
+
+      tabPendingContent.style.display = tab === 'pending' ? 'block' : 'none';
+      tabBatchesContent.style.display = tab === 'batches' ? 'block' : 'none';
+      tabCompletedContent.style.display = tab === 'completed' ? 'block' : 'none';
+
+      if (tab === 'batches') {
+        fetchBatches();
+      } else if (tab === 'completed') {
+        fetchCompletedLogs();
+      }
+    }
+
+    tabPendingBtn.addEventListener('click', () => selectTab('pending'));
+    tabBatchesBtn.addEventListener('click', () => selectTab('batches'));
+    tabCompletedBtn.addEventListener('click', () => selectTab('completed'));
+
+    // Date Quick Selectors
+    document.getElementById('btnQuickToday').addEventListener('click', () => {
+      const today = new Date().toISOString().slice(0, 10);
+      filterStartDate.value = today;
+      filterEndDate.value = today;
+      fetchCrmPendingCalls();
+    });
+    document.getElementById('btnQuickYesterday').addEventListener('click', () => {
+      const yest = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+      filterStartDate.value = yest;
+      filterEndDate.value = yest;
+      fetchCrmPendingCalls();
+    });
+
+    // Fetch CRM Pending Calls
+    async function fetchCrmPendingCalls() {
+      const start = filterStartDate.value;
+      const end = filterEndDate.value;
+      pendingTableBody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">Fetching pending calls from CRM...</td></tr>';
+      try {
+        const res = await fetch(`/api/crm/pending-calls?start_date=${start}&end_date=${end}`);
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          showAlert(`CRM Fetch Error: ${data.error || 'Failed to query CRM'}`);
+          pendingTableBody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: #f87171; padding: 20px;">Failed to fetch calls. Check real MongoDB connection.</td></tr>';
+          return;
+        }
+        showAlert('');
+        crmCalls = data.calls || [];
+        renderPendingTable();
+      } catch (err) {
+        showAlert(`Network error connecting to CRM: ${err.message}`);
+      }
+    }
+
+    function renderPendingTable() {
+      let sourceCalls = crmCalls;
+      if (chkUniqueOnly && chkUniqueOnly.checked) {
+        const seen = new Set();
+        sourceCalls = [];
+        for (const c of crmCalls) {
+          const num10 = String(c.phone_number || '').replace(/\D/g, '').slice(-10);
+          if (num10 && !seen.has(num10)) {
+            seen.add(num10);
+            sourceCalls.push(c);
+          }
+        }
+      }
+
+      const filter = filterSearchInput.value.trim().toLowerCase();
+      const filtered = sourceCalls.filter(c => {
+        if (!filter) return true;
+        return (c.phone_number || '').toLowerCase().includes(filter) ||
+               (c.customer_name || '').toLowerCase().includes(filter) ||
+               (c.source || '').toLowerCase().includes(filter);
+      });
+
+      const uniqueNote = (chkUniqueOnly && chkUniqueOnly.checked) ? ` (unique callers, ${crmCalls.length} total pending)` : ` (${crmCalls.length} total pending)`;
+      crmFetchedCount.textContent = `Showing ${filtered.length} of ${sourceCalls.length} pending calls${uniqueNote}`;
+      btnQueueAllFiltered.textContent = `Queue All to Dialer (${filtered.length})`;
+
+      if (filtered.length === 0) {
+        pendingTableBody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">No pending calls found for this filter.</td></tr>';
+        return;
+      }
+
+      pendingTableBody.innerHTML = filtered.map(c => {
+        const timeStr = c.createdAt ? new Date(c.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--';
+        return `
+          <tr data-call-id="${escapeHtml(c.id)}">
+            <td><input type="checkbox" class="call-row-check" data-phone="${escapeHtml(c.phone_number)}" data-name="${escapeHtml(c.customer_name)}" data-source="${escapeHtml(c.source)}" checked></td>
+            <td style="font-family: var(--mono); font-weight: 600;">${escapeHtml(c.phone_number)}</td>
+            <td>${escapeHtml(c.customer_name || '--')}</td>
+            <td>${escapeHtml(c.source || c.campaign || '--')}</td>
+            <td>${escapeHtml((c.missedAgents && c.missedAgents[0]) || 'Queue')}</td>
+            <td style="font-family: var(--mono); color: var(--text-muted);">${escapeHtml(timeStr)}</td>
+            <td style="font-family: var(--mono);">${c.duration || 0}s</td>
+            <td><span class="tag tag-pending">Pending</span></td>
+            <td><button class="btn btn-secondary btn-dial-one" data-phone="${escapeHtml(c.phone_number)}" data-name="${escapeHtml(c.customer_name)}" style="padding: 2px 6px; font-size: 0.7rem;">Dial</button></td>
+          </tr>
+        `;
+      }).join('');
+
+      document.querySelectorAll('.btn-dial-one').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const phone = btn.getAttribute('data-phone');
+          const name = btn.getAttribute('data-name') || '';
+          manualPhoneInput.value = phone;
+          triggerManualDial(phone, name, btn);
+        });
+      });
+
+      selectAllCheckbox.checked = true;
+      updateSelectedCount();
+    }
+
+    function updateSelectedCount() {
+      const selected = document.querySelectorAll('.call-row-check:checked').length;
+      btnQueueAllFiltered.textContent = `Queue Selected to Dialer (${selected})`;
+    }
+
+    selectAllCheckbox.addEventListener('change', () => {
+      const checked = selectAllCheckbox.checked;
+      document.querySelectorAll('.call-row-check').forEach(cb => { cb.checked = checked; });
+      updateSelectedCount();
+    });
+
+    document.addEventListener('change', (e) => {
+      if (e.target && e.target.classList.contains('call-row-check')) {
+        updateSelectedCount();
+      }
+    });
+
+    filterSearchInput.addEventListener('input', renderPendingTable);
+    if (chkUniqueOnly) chkUniqueOnly.addEventListener('change', renderPendingTable);
+    btnApplyFilter.addEventListener('click', fetchCrmPendingCalls);
+
+    // Queue All Filtered to Dialer
+    btnQueueAllFiltered.addEventListener('click', async () => {
+      const selectedChecks = Array.from(document.querySelectorAll('.call-row-check:checked'));
+      if (selectedChecks.length === 0) {
+        alert('Please select at least one call to queue.');
+        return;
+      }
+      btnQueueAllFiltered.disabled = true;
+      btnQueueAllFiltered.textContent = 'Queueing...';
+
+      const leads = selectedChecks.map(cb => ({
+        phone_number: cb.getAttribute('data-phone'),
+        customer_name: cb.getAttribute('data-name') || '',
+        source: cb.getAttribute('data-source') || 'CRM Missed Call'
+      }));
+
+      const dateRangeStr = (filterStartDate.value === filterEndDate.value) ? filterStartDate.value : `${filterStartDate.value} to ${filterEndDate.value}`;
+      const payload = {
+        leads,
+        batch_name: `Batch (${dateRangeStr}) - ${leads.length} calls`,
+        source_filter: `CRM Missed Calls (${dateRangeStr})`
+      };
+
+      try {
+        const res = await fetch('/api/campaign/leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showAlert('');
+          fetchCampaignStatus();
+          fetchBatches();
+          alert(`Successfully queued ${leads.length} pending calls to the automated outbound dialer.`);
+        } else {
+          showAlert(`Failed to queue leads: ${data.error}`);
+        }
+      } catch (err) {
+        showAlert(`Network error: ${err.message}`);
+      } finally {
+        btnQueueAllFiltered.disabled = false;
+        btnQueueAllFiltered.textContent = 'Queue All to Dialer';
+      }
+    });
+
+    // Campaign Controls
+    btnStartCamp.addEventListener('click', async () => {
+      btnStartCamp.disabled = true;
+      try {
+        const res = await fetch('/api/campaign/start', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          fetchCampaignStatus();
+        }
+      } catch (err) {
+        showAlert(err.message);
+      } finally {
+        btnStartCamp.disabled = false;
+      }
+    });
+
+    btnPauseCamp.addEventListener('click', async () => {
+      const endpoint = isCampaignPaused ? '/api/campaign/resume' : '/api/campaign/pause';
+      try {
+        await fetch(endpoint, { method: 'POST' });
+        fetchCampaignStatus();
+      } catch (err) {
+        showAlert(err.message);
+      }
+    });
+
+    btnStopCamp.addEventListener('click', async () => {
+      try {
+        await fetch('/api/campaign/stop', { method: 'POST' });
+        fetchCampaignStatus();
+      } catch (err) {
+        showAlert(err.message);
+      }
+    });
+
+    btnClearQueue.addEventListener('click', async () => {
+      if (!confirm('Clear active queue and reset counters to start a fresh batch?')) return;
+      try {
+        const res = await fetch('/api/campaign/reset', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          selectAllCheckbox.checked = false;
+          document.querySelectorAll('.call-row-check').forEach(cb => { cb.checked = false; });
+          updateSelectedCount();
+          await fetchCampaignStatus();
+          await fetchBatches();
+        }
+      } catch (err) {
+        showAlert('Failed to reset queue: ' + err.message);
+      }
+    });
+
+    if (btnRetryOnly) {
+      btnRetryOnly.addEventListener('click', async () => {
+        try {
+          await fetch('/api/campaign/reset', { method: 'POST' });
+          fetchCampaignStatus();
+        } catch (err) {
+          showAlert(err.message);
+        }
+      });
+    }
+
+    // Manual Dial
+    async function triggerManualDial(phone, contactName = '', rowBtn = null) {
+      if (!phone) return;
+      btnManualDial.disabled = true;
+      btnManualDial.textContent = 'Dialing...';
+      if (rowBtn) {
+        rowBtn.disabled = true;
+        rowBtn.textContent = 'Dialing...';
+      }
+
+      liveHud.classList.add('active');
+      liveHud.style.borderColor = '#fde68a';
+      liveHud.style.backgroundColor = '#fffbeb';
+      hudDot.style.background = '#f59e0b';
+      hudPhase.textContent = 'DIALING';
+      hudPhase.style.color = '#b45309';
+      hudTimer.textContent = '00:00';
+      hudPhone.textContent = contactName ? `${contactName} (${phone})` : phone;
+      hudMeta.textContent = 'Connecting carrier line via Vobiz...';
+      hudTranscript.innerHTML = '<div style="color: var(--text-muted); font-size: 0.72rem; padding: 4px;">Initiating call to recipient handset...</div>';
+
+      manualDialStatusTag.style.display = 'inline-block';
+      manualDialStatusTag.textContent = 'DIALING';
+      manualDialStatusTag.style.color = '#b45309';
+
+      manualDialFeedback.style.display = 'block';
+      manualDialFeedback.textContent = `Call dispatched to ${phone}. Waiting for answer...`;
+
+      try {
+        const res = await fetch('/api/dial', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: phone, contact_name: contactName })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          const errMsg = data.error ? (typeof data.error === 'object' ? JSON.stringify(data.error) : data.error) : 'Dial failed';
+          showAlert(errMsg);
+          manualDialFeedback.textContent = `Error: ${errMsg}`;
+          manualDialStatusTag.textContent = 'FAILED';
+          manualDialStatusTag.style.color = '#dc2626';
+          liveHud.classList.remove('active');
+          btnManualDial.disabled = false;
+          btnManualDial.textContent = 'Dial';
+          if (rowBtn) {
+            rowBtn.disabled = false;
+            rowBtn.textContent = 'Dial';
+          }
+        } else {
+          showAlert('');
+          fetchCampaignStatus();
+        }
+      } catch (err) {
+        showAlert(err.message);
+        manualDialFeedback.textContent = `Network error: ${err.message}`;
+        manualDialStatusTag.textContent = 'FAILED';
+        manualDialStatusTag.style.color = '#dc2626';
+        liveHud.classList.remove('active');
+        btnManualDial.disabled = false;
+        btnManualDial.textContent = 'Dial';
+        if (rowBtn) {
+          rowBtn.disabled = false;
+          rowBtn.textContent = 'Dial';
+        }
+      }
+    }
+    btnManualDial.addEventListener('click', () => triggerManualDial(manualPhoneInput.value.trim()));
+
+    // Predefined Test Contacts configuration
+    const PREDEFINED_TEST_CONTACTS = [
+      { name: 'Afsar', phone: '+917007173798' },
+      { name: 'Afsar 2', phone: '+916201856832' },
+      { name: 'Nitesh', phone: '+917781911392' },
+      { name: 'Krupali', phone: '+919769756433' },
+      { name: 'Botify', phone: '+918065521614' },
+      { name: 'Prakash', phone: '+917976818025' }
+    ];
+
+    const testContactsList = document.getElementById('testContactsList');
+    const testContactsCount = document.getElementById('testContactsCount');
+    const testContactsTotal = document.getElementById('testContactsTotal');
+    const testBatchBtnCount = document.getElementById('testBatchBtnCount');
+    const btnToggleAllTestContacts = document.getElementById('btnToggleAllTestContacts');
+    const btnStartTestBatch = document.getElementById('btnStartTestBatch');
+    const btnQueueTestBatchOnly = document.getElementById('btnQueueTestBatchOnly');
+    const testBatchFeedback = document.getElementById('testBatchFeedback');
+
+    function renderTestContacts() {
+      if (!testContactsList) return;
+      if (testContactsTotal) testContactsTotal.textContent = PREDEFINED_TEST_CONTACTS.length;
+      testContactsList.innerHTML = PREDEFINED_TEST_CONTACTS.map((c, idx) => `
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 4px 6px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; font-size: 0.74rem;">
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; flex: 1; margin: 0; user-select: none;">
+            <input type="checkbox" class="test-contact-cb" data-index="${idx}" data-phone="${c.phone}" data-name="${escapeHtml(c.name)}" checked style="cursor: pointer;">
+            <span style="font-weight: 600; color: #1e293b;">${escapeHtml(c.name)}</span>
+            <span style="font-family: var(--mono); color: var(--text-muted); font-size: 0.7rem;">${c.phone}</span>
+          </label>
+          <button type="button" class="btn-fill-single" data-phone="${c.phone}" title="Use in Single Test Dial" style="font-size: 0.65rem; color: #475569; background: #e2e8f0; border: none; border-radius: 3px; padding: 2px 6px; cursor: pointer; margin-left: 4px;">
+            Use
+          </button>
+        </div>
+      `).join('');
+
+      testContactsList.querySelectorAll('.test-contact-cb').forEach(cb => {
+        cb.addEventListener('change', updateTestContactsSelection);
+      });
+
+      testContactsList.querySelectorAll('.btn-fill-single').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const phone = btn.getAttribute('data-phone');
+          if (manualPhoneInput) {
+            manualPhoneInput.value = phone;
+            manualPhoneInput.focus();
+          }
+        });
+      });
+
+      updateTestContactsSelection();
+    }
+
+    function updateTestContactsSelection() {
+      const allCbs = document.querySelectorAll('.test-contact-cb');
+      const checked = document.querySelectorAll('.test-contact-cb:checked');
+      if (testContactsCount) testContactsCount.textContent = checked.length;
+      if (testBatchBtnCount) testBatchBtnCount.textContent = checked.length;
+      if (btnStartTestBatch) btnStartTestBatch.disabled = (checked.length === 0);
+      if (btnQueueTestBatchOnly) btnQueueTestBatchOnly.disabled = (checked.length === 0);
+      if (btnToggleAllTestContacts) {
+        btnToggleAllTestContacts.textContent = (checked.length === allCbs.length) ? 'Deselect All' : 'Select All';
+      }
+    }
+
+    if (btnToggleAllTestContacts) {
+      btnToggleAllTestContacts.addEventListener('click', () => {
+        const allCbs = document.querySelectorAll('.test-contact-cb');
+        const checked = document.querySelectorAll('.test-contact-cb:checked');
+        const shouldCheck = (checked.length !== allCbs.length);
+        allCbs.forEach(cb => { cb.checked = shouldCheck; });
+        updateTestContactsSelection();
+      });
+    }
+
+    async function queueTestBatch(startImmediately = true) {
+      const checked = Array.from(document.querySelectorAll('.test-contact-cb:checked'));
+      if (checked.length === 0) {
+        showAlert('Please select at least one contact.');
+        return;
+      }
+
+      const leads = checked.map(cb => ({
+        phone_number: cb.getAttribute('data-phone'),
+        customer_name: cb.getAttribute('data-name'),
+        source: 'Predefined Test Contact'
+      }));
+
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const batchName = `Test Batch (${timeStr}) - ${leads.length} calls`;
+
+      if (testBatchFeedback) {
+        testBatchFeedback.style.display = 'block';
+        testBatchFeedback.textContent = `Queueing ${leads.length} contacts...`;
+      }
+      if (btnStartTestBatch) btnStartTestBatch.disabled = true;
+      if (btnQueueTestBatchOnly) btnQueueTestBatchOnly.disabled = true;
+
+      try {
+        const res = await fetch('/api/campaign/leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            leads,
+            batch_name: batchName,
+            source_filter: 'Predefined Test Contacts'
+          })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          if (testBatchFeedback) testBatchFeedback.textContent = `Error: ${data.error || 'Failed to queue'}`;
+          return;
+        }
+
+        if (startImmediately) {
+          if (testBatchFeedback) testBatchFeedback.textContent = `Starting OBD dialer for ${leads.length} calls...`;
+          await fetch('/api/campaign/start', { method: 'POST' });
+        }
+
+        if (testBatchFeedback) {
+          testBatchFeedback.textContent = startImmediately
+            ? `Started OBD for ${leads.length} contacts (${batchName})`
+            : `Queued ${leads.length} contacts. Ready to start OBD.`;
+          setTimeout(() => {
+            if (testBatchFeedback) testBatchFeedback.style.display = 'none';
+          }, 5000);
+        }
+
+        fetchCampaignStatus();
+        fetchBatches();
+      } catch (err) {
+        if (testBatchFeedback) testBatchFeedback.textContent = `Network error: ${err.message}`;
+      } finally {
+        updateTestContactsSelection();
+      }
+    }
+
+    if (btnStartTestBatch) {
+      btnStartTestBatch.addEventListener('click', () => queueTestBatch(true));
+    }
+    if (btnQueueTestBatchOnly) {
+      btnQueueTestBatchOnly.addEventListener('click', () => queueTestBatch(false));
+    }
+
+    renderTestContacts();
+
+    // Campaign Status Polling
+    async function fetchCampaignStatus() {
+      try {
+        const res = await fetch('/api/campaign/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        const stats = data.stats || {};
+
+        kpiTotal.textContent = stats.total || 0;
+        kpiPending.textContent = stats.pending || 0;
+        kpiActive.textContent = (stats.dialing || 0) + (stats.in_call || 0);
+        kpiInterested.textContent = stats.interested || 0;
+        kpiDeclined.textContent = stats.not_interested || 0;
+        kpiWrongNumber.textContent = stats.wrong_number || 0;
+        kpiNotTalking.textContent = stats.not_talking || 0;
+        kpiNoAnswer.textContent = stats.no_answer || 0;
+        if (kpiDropped) kpiDropped.textContent = stats.dropped || 0;
+
+        const activeCount = (stats.dialing || 0) + (stats.in_call || 0);
+        const completed = Math.max(0, (stats.total || 0) - (stats.pending || 0) - activeCount);
+        queueProgress.textContent = `${completed} / ${stats.total || 0}`;
+
+        if (btnRetryOnly) {
+          const retries = stats.retry_scheduled || 0;
+          btnRetryOnly.textContent = retries > 0 ? `Retry Failed (${retries})` : 'Retry Failed';
+          btnRetryOnly.style.display = retries > 0 ? 'inline' : 'none';
+        }
+
+        isCampaignPaused = !!data.is_paused;
+
+        if (data.is_running) {
+          if (data.is_paused) {
+            campaignStatusPill.textContent = 'OBD: Paused';
+            campaignStatusPill.className = 'pill pill-status paused';
+            btnPauseCamp.textContent = 'Resume';
+          } else {
+            campaignStatusPill.textContent = 'OBD: Running';
+            campaignStatusPill.className = 'pill pill-status running';
+            btnPauseCamp.textContent = 'Pause';
+          }
+          btnStartCamp.disabled = true;
+          btnPauseCamp.disabled = false;
+          btnStopCamp.disabled = false;
+        } else {
+          campaignStatusPill.textContent = 'OBD: Idle';
+          campaignStatusPill.className = 'pill pill-status idle';
+          btnStartCamp.disabled = false;
+          btnPauseCamp.disabled = true;
+          btnPauseCamp.textContent = 'Pause';
+          btnStopCamp.disabled = true;
+        }
+
+        if (data.error_message) {
+          showAlert(data.error_message);
+        }
+
+        // Live HUD Active Call
+        if (data.active_calls && data.active_calls.length > 0) {
+          wasCallActive = true;
+          const ac = data.active_calls[0];
+          const isDialing = ac.status === 'dialing';
+          const isInCall = ac.status === 'in_call';
+
+          if (isDialing) {
+            liveHud.style.borderColor = '#fde68a';
+            liveHud.style.backgroundColor = '#fffbeb';
+            hudDot.style.background = '#f59e0b';
+            hudDot.style.animation = 'pulseDot 1.4s infinite ease-in-out';
+            hudPhase.textContent = 'DIALING';
+            hudPhase.style.color = '#b45309';
+            hudTimer.style.color = '#b45309';
+            btnManualDial.disabled = true;
+            btnManualDial.textContent = 'Dialing...';
+            manualDialStatusTag.style.display = 'inline-block';
+            manualDialStatusTag.textContent = 'DIALING';
+            manualDialStatusTag.style.color = '#b45309';
+            manualDialFeedback.style.display = 'block';
+            manualDialFeedback.textContent = `Dialing ${ac.phone_number}... Awaiting customer pickup`;
+          } else {
+            liveHud.style.borderColor = '#86efac';
+            liveHud.style.backgroundColor = '#f0fdf4';
+            hudDot.style.background = '#16a34a';
+            hudDot.style.animation = 'pulseDot 1.4s infinite ease-in-out';
+            hudPhase.textContent = 'ANSWERED / IN CALL';
+            hudPhase.style.color = '#15803d';
+            hudTimer.style.color = '#15803d';
+            btnManualDial.disabled = true;
+            btnManualDial.textContent = 'In Call';
+            manualDialStatusTag.style.display = 'inline-block';
+            manualDialStatusTag.textContent = 'IN CALL';
+            manualDialStatusTag.style.color = '#15803d';
+            manualDialFeedback.style.display = 'block';
+            manualDialFeedback.textContent = `Connected with ${ac.phone_number}. AI agent Ananya is in conversation.`;
+          }
+
+          const mins = String(Math.floor(ac.elapsed_sec / 60)).padStart(2, '0');
+          const secs = String(ac.elapsed_sec % 60).padStart(2, '0');
+          hudTimer.textContent = `${mins}:${secs}`;
+          hudPhone.textContent = ac.customer_name ? `${ac.customer_name} (${ac.phone_number})` : ac.phone_number;
+          hudPhone.style.color = 'var(--text)';
+          hudMeta.textContent = `Call UUID: ${ac.call_uuid.slice(0, 12)}... | Status: ${ac.status}`;
+
+          if (isDialing) {
+            hudTranscript.innerHTML = '<div style="color: #b45309; font-size: 0.72rem; padding: 4px;">Ringing customer handset... Awaiting pickup</div>';
+          } else if (ac.turns && ac.turns.length > 0) {
+            hudTranscript.innerHTML = ac.turns.map(t => `
+              <div class="transcript-turn turn-${escapeHtml(t.role)}">
+                <div class="turn-lbl ${escapeHtml(t.role)}">${t.role === 'agent' ? 'Ananya (AI)' : 'Customer'}</div>
+                <div>${escapeHtml(t.text)}</div>
+              </div>
+            `).join('');
+            hudTranscript.scrollTop = hudTranscript.scrollHeight;
+          } else if (isInCall) {
+            hudTranscript.innerHTML = '<div style="color: #15803d; font-size: 0.72rem; padding: 4px;">Connected! Establishing audio stream...</div>';
+          } else {
+            hudTranscript.innerHTML = '<div style="color: var(--text-muted); font-size: 0.72rem; padding: 4px;">Ringing customer handset...</div>';
+          }
+        } else {
+          // No active call
+          btnManualDial.disabled = false;
+          btnManualDial.textContent = 'Dial';
+          document.querySelectorAll('.btn-dial-one').forEach(b => {
+            if (b.textContent === 'Dialing...') {
+              b.disabled = false;
+              b.textContent = 'Dial';
+            }
+          });
+
+          if (wasCallActive) {
+            wasCallActive = false;
+            fetchCompletedLogs();
+          }
+
+          if (data.last_completed_call) {
+            const lc = data.last_completed_call;
+            liveHud.style.borderColor = '#cbd5e1';
+            liveHud.style.backgroundColor = '#f8fafc';
+            hudDot.style.background = '#64748b';
+            hudDot.style.animation = 'none';
+            hudPhase.textContent = `COMPLETED: ${(lc.disposition || 'ENDED').toUpperCase()}`;
+            hudPhase.style.color = lc.disposition === 'interested' ? '#047857' : '#475569';
+            hudTimer.textContent = `${lc.duration || 0}s`;
+            hudTimer.style.color = '#64748b';
+            hudPhone.textContent = lc.phone_number ? `Last Call: ${lc.phone_number}` : 'No active call';
+            hudPhone.style.color = 'var(--text)';
+            const diagClass = (lc.diagnostic && lc.diagnostic.classification) ? lc.diagnostic.classification : '';
+            const diagSummary = (lc.diagnostic && lc.diagnostic.root_cause_summary) ? lc.diagnostic.root_cause_summary : '';
+            const healthBadge = diagClass ? ` | Health: ${diagClass.toUpperCase()}` : '';
+            hudMeta.textContent = `Disposition: ${lc.disposition || 'completed'} | Duration: ${lc.duration || 0}s${healthBadge}`;
+            if (Date.now() / 1000 - lc.ended_at < 12) {
+              manualDialStatusTag.style.display = 'inline-block';
+              manualDialStatusTag.textContent = (lc.disposition || 'COMPLETED').toUpperCase();
+              manualDialStatusTag.style.color = lc.disposition === 'interested' ? '#16a34a' : '#64748b';
+              manualDialFeedback.style.display = 'block';
+              manualDialFeedback.textContent = `Call finished (${lc.duration}s). ${diagSummary || `Disposition: ${lc.disposition}`}`;
+            }
+            if (lc.turns && lc.turns.length > 0) {
+              hudTranscript.innerHTML = lc.turns.map(t => `
+                <div class="transcript-turn turn-${escapeHtml(t.role)}">
+                  <div class="turn-lbl ${escapeHtml(t.role)}">${t.role === 'agent' ? 'Ananya (AI)' : 'Customer'}</div>
+                  <div>${escapeHtml(t.text)}</div>
+                </div>
+              `).join('');
+            }
+          } else {
+            liveHud.style.borderColor = 'var(--border)';
+            liveHud.style.backgroundColor = '#f8fafc';
+            hudDot.style.background = '#94a3b8';
+            hudDot.style.animation = 'none';
+            hudPhase.textContent = 'IDLE';
+            hudPhase.style.color = '#64748b';
+            hudTimer.textContent = '--:--';
+            hudTimer.style.color = '#64748b';
+            hudPhone.textContent = 'No active call in progress';
+            hudPhone.style.color = 'var(--text-muted)';
+            hudMeta.textContent = 'Dialer is idle. Start OBD or trigger a single test dial.';
+            hudTranscript.innerHTML = '<div style="color: var(--text-muted); font-size: 0.72rem; padding: 4px;">Awaiting active call session...</div>';
+            manualDialStatusTag.style.display = 'none';
+            manualDialFeedback.style.display = 'none';
+          }
+        }
+
+        // Next Call Preview
+        if (data.next_call) {
+          nextCallPhone.textContent = data.next_call.customer_name ? `${data.next_call.customer_name} (${data.next_call.phone_number})` : data.next_call.phone_number;
+          nextCallMeta.textContent = `Priority: 1 | Source: ${data.next_call.source || 'CRM'}`;
+        } else {
+          nextCallPhone.textContent = 'No pending calls queued';
+          nextCallMeta.textContent = '--';
+        }
+
+      } catch (err) {
+        // silent polling catch
+      }
+    }
+
+    // Fetch Completed Calls Logs
+    async function fetchCompletedLogs() {
+      try {
+        const res = await fetch('/calls?limit=50');
+        if (!res.ok) return;
+        const list = await res.json();
+        if (list.length === 0) {
+          completedLogsContainer.innerHTML = '<div style="text-align: center; padding: 32px; color: var(--text-muted);">No completed calls yet.</div>';
+          return;
+        }
+
+        completedLogsContainer.innerHTML = list.map(entry => {
+          const recEvent = (entry.events || []).find(e => e.kind === 'recording');
+          const recUrl = entry.recording_url || (recEvent ? (recEvent.recording_url || (recEvent.params && recEvent.params.RecordUrl)) : '');
+          const hangupEvent = (entry.events || []).find(e => e.kind === 'hangup');
+          const duration = (entry.duration !== undefined && entry.duration !== null && entry.duration > 0)
+            ? entry.duration
+            : (hangupEvent ? (hangupEvent.params?.Duration || '0') : '0');
+          const disp = entry.disposition || 'completed';
+          const custName = entry.customer_name || entry.contact_name || '';
+          const cbTime = entry.callback_time || '';
+
+          const toNum = entry.phone_number ||
+                        (entry.events || []).find(e => e.to || e.params?.To)?.to ||
+                        (entry.events || []).find(e => e.params?.To)?.params?.To ||
+                        (entry.events || []).find(e => e.params?.From)?.params?.From || '';
+
+          let dispTagClass = 'tag-completed';
+          if (disp === 'interested') dispTagClass = 'tag-interested';
+          else if (disp === 'not_interested' || disp === 'wrong_number') dispTagClass = 'tag-declined';
+          else if (disp === 'dropped') dispTagClass = 'tag-declined';
+          else if (disp === 'no_answer' || disp === 'not_talking' || disp === 'busy') dispTagClass = 'tag-noanswer';
+
+          const diag = entry.diagnostic || {};
+          const diagType = diag.classification || 'unknown';
+          let diagBadge = '';
+          if (diagType === 'success') {
+            diagBadge = '<span class="tag tag-interested">OK: BIDIRECTIONAL</span>';
+          } else if (diagType === 'no_incoming_audio') {
+            diagBadge = '<span class="tag tag-declined">NO INCOMING AUDIO</span>';
+          } else if (diagType === 'incoming_audio_exists_gemini_missing') {
+            diagBadge = '<span class="tag tag-noanswer">GEMINI OUTPUT MISSING</span>';
+          } else if (diagType === 'gemini_audio_produced_caller_silence') {
+            diagBadge = '<span class="tag tag-pending">CALLER SILENCE</span>';
+          } else if (diagType === 'everything_stopped_together') {
+            diagBadge = '<span class="tag tag-completed">DISCONNECTED EARLY</span>';
+          }
+
+          const am = diag.audio_metrics || entry.audio_metrics || {};
+          const ws = diag.websocket || {};
+          const hg = diag.hangup || {};
+
+          const eventsHtml = (entry.events && entry.events.length > 0) ? entry.events.map(ev => {
+            const detailNote = ev.details?.telephony_status || ev.details?.cause || ev.details?.error || '';
+            return `
+            <div style="font-size: 0.68rem; padding: 2px 0; border-bottom: 1px dotted #e2e8f0; font-family: var(--mono); display: flex; justify-content: space-between; align-items: baseline;">
+              <div>
+                <span style="font-weight: 600; color: #1e40af;">${escapeHtml(ev.event)}</span>
+                ${detailNote ? `<span style="color: #64748b; font-size: 0.62rem; margin-left: 6px;">(${escapeHtml(detailNote)})</span>` : ''}
+              </div>
+              <span style="color: var(--text-muted);">${ev.timestamp ? ev.timestamp.slice(11, 23) : '--'}</span>
+            </div>`;
+          }).join('') : '<div style="font-size: 0.68rem; color: var(--text-muted);">No milestone events recorded.</div>';
+
+          const turnsHtml = (entry.turns && entry.turns.length > 0) ? entry.turns.map(t => `
+            <div style="margin-top: 4px; padding: 4px 6px; background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 2px;">
+              <span style="font-weight: 600; color: ${t.role === 'agent' ? '#1d4ed8' : '#047857'}; font-size: 0.68rem; text-transform: uppercase;">${t.role === 'agent' ? 'Ananya' : 'Customer'}:</span>
+              <span>${escapeHtml(t.text)}</span>
+            </div>
+          `).join('') : '<div style="color: var(--text-muted); font-size: 0.7rem; margin-top: 4px;">No dialog recorded (unanswered or dropped).</div>';
+
+          const formattedTime = entry.started ? new Date(entry.started).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--';
+
+          return `
+            <div class="log-item">
+              <div class="log-header">
+                <div>
+                  <span class="log-phone">${toNum ? escapeHtml(toNum) : escapeHtml(entry.call_uuid.slice(0, 12))}</span>
+                  ${custName ? `<span style="font-weight: 600; margin-left: 6px; color: #1e40af;">${escapeHtml(custName)}</span>` : ''}
+                  <span style="font-size: 0.68rem; color: var(--text-muted); font-family: var(--mono); margin-left: 6px;">(${escapeHtml(entry.call_uuid.slice(0, 8))})</span>
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                  ${diagBadge}
+                  <span class="tag ${dispTagClass}">${escapeHtml(disp.toUpperCase())}</span>
+                  <span style="font-family: var(--mono); color: var(--text-muted); font-size: 0.75rem;">${duration}s</span>
+                </div>
+              </div>
+              <div class="log-details">
+                ${cbTime ? `<span style="color: #047857; font-weight: 600;">Callback: ${escapeHtml(cbTime)}</span>` : ''}
+                <span>Started: ${formattedTime}</span>
+                <span>In: ${am.inbound_bytes || 0}B (${am.inbound_chunks || 0})</span>
+                <span>Out: ${am.outbound_bytes || 0}B</span>
+                ${ws.close_code ? `<span>WS: ${ws.close_code}</span>` : ''}
+                ${hg.cause ? `<span>Hangup: ${escapeHtml(hg.cause)}</span>` : ''}
+              </div>
+              ${diag.root_cause_summary ? `<div style="font-size: 0.71rem; color: #334155; margin-bottom: 4px; padding: 2px 4px; background: #f1f5f9; border-radius: 2px;"><strong>Diagnostic:</strong> ${escapeHtml(diag.root_cause_summary)}</div>` : ''}
+              ${(recUrl || (duration > 5 && (am.inbound_bytes > 0 || am.outbound_bytes > 0))) ? `
+                <div style="margin: 6px 0;">
+                  <div style="font-size: 0.68rem; color: #475569; font-weight: 600; margin-bottom: 2px;">Call Recording:</div>
+                  <audio controls preload="none" style="width: 100%; height: 32px;" src="/api/recording/${encodeURIComponent(entry.call_uuid)}"></audio>
+                </div>
+              ` : ''}
+              <details style="margin-top: 6px;">
+                <summary style="cursor: pointer; font-size: 0.72rem; color: var(--text-muted);">View Transcript Conversation (${(entry.turns || []).length} turns)</summary>
+                <div style="margin-top: 4px;">${turnsHtml}</div>
+              </details>
+              <details style="margin-top: 4px;">
+                <summary style="cursor: pointer; font-size: 0.7rem; color: #2563eb;">View Lifecycle Timeline (${(entry.events || []).length} events)</summary>
+                <div style="margin-top: 4px; padding: 6px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 3px;">
+                  ${eventsHtml}
+                </div>
+              </details>
+            </div>
+          `;
+        }).join('');
+
+      } catch (err) {
+        completedLogsContainer.innerHTML = `<div style="color: #f87171; padding: 16px;">Failed to load logs: ${err.message}</div>`;
+      }
+    }
+
+    btnRefreshLogs.addEventListener('click', fetchCompletedLogs);
+
+    // Campaign Batches Fetch & Render
+    async function fetchBatches() {
+      try {
+        const res = await fetch('/api/campaign/batches');
+        if (!res.ok) return;
+        const data = await res.json();
+        const batches = data.batches || [];
+        renderBatchesList(batches);
+      } catch (err) {
+        batchesContainer.innerHTML = `<div style="color: #dc2626; padding: 16px;">Failed to load batches: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function renderBatchesList(batches) {
+      if (batches.length === 0) {
+        batchesContainer.innerHTML = '<div style="text-align: center; padding: 32px; color: var(--text-muted);">No campaign batches recorded yet. Queue contacts from CRM to start your first batch.</div>';
+        return;
+      }
+      batchesContainer.innerHTML = batches.map(b => {
+        const m = b.metrics || {};
+        const isCompleted = b.status === 'completed';
+        const startedTime = b.started_at ? new Date(b.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--';
+        const startedDate = b.started_at ? new Date(b.started_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
+        const statusClass = isCompleted ? 'idle' : 'running';
+
+        return `
+          <div class="batch-card" onclick="openBatchDetail('${escapeHtml(b.batch_id)}')">
+            <div class="batch-card-header">
+              <span class="batch-title">${escapeHtml(b.name || b.batch_id)}</span>
+              <span class="pill pill-status ${statusClass}">${escapeHtml((b.status || 'ACTIVE').toUpperCase())}</span>
+            </div>
+            <div class="batch-meta">
+              <span>ID: ${escapeHtml(b.batch_id)}</span> &bull; 
+              <span>Launched: ${startedDate} ${startedTime}</span> &bull; 
+              <span>${escapeHtml(b.source_filter || 'CRM Missed Calls')}</span>
+            </div>
+            <div class="batch-kpis">
+              <span class="batch-pill">Total: ${b.total_leads || 0}</span>
+              <span class="batch-pill">Dialed: ${m.dialed || 0}</span>
+              <span class="batch-pill interested">Interested: ${m.interested || 0}</span>
+              <span class="batch-pill declined">Declined: ${m.not_interested || 0}</span>
+              <span class="batch-pill wrong">Wrong: ${m.wrong_number || 0}</span>
+              <span class="batch-pill silent">Not Talking: ${m.not_talking || 0}</span>
+              <span class="batch-pill noanswer">No Answer: ${m.no_answer || 0}</span>
+              <span class="batch-pill" style="color:#b91c1c; border-color:#fca5a5; background:#fff1f2;">Dropped: ${m.dropped || 0}</span>
+            </div>
+            <div style="font-size: 0.72rem; color: #2563eb; font-weight: 600; margin-top: 6px;">
+              View Call Recordings &amp; Transcripts &rarr;
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    let currentBatchDetailId = null;
+
+    async function openBatchDetail(batchId) {
+      currentBatchDetailId = batchId;
+      batchesListView.style.display = 'none';
+      batchDetailView.style.display = 'block';
+      batchDetailTitle.textContent = `Loading ${batchId}...`;
+      batchCallsListContainer.innerHTML = '<div style="text-align: center; padding: 24px; color: var(--text-muted);">Fetching call records and audio recordings...</div>';
+
+      try {
+        const res = await fetch(`/api/campaign/batches/${encodeURIComponent(batchId)}`);
+        if (!res.ok) throw new Error('Failed to load batch detail');
+        const data = await res.json();
+        const b = data.batch || {};
+        const calls = data.calls || [];
+
+        batchDetailTitle.textContent = `${b.name || b.batch_id}`;
+        batchDetailStatusBadge.textContent = (b.status || 'ACTIVE').toUpperCase();
+        batchDetailStatusBadge.className = `pill pill-status ${b.status === 'completed' ? 'idle' : 'running'}`;
+        batchCallsCount.textContent = calls.length;
+
+        const m = b.metrics || {};
+        batchDetailKpiRow.innerHTML = `
+          <div class="kpi-box"><span class="kpi-num">${b.total_leads || 0}</span><span class="kpi-lbl">Total</span></div>
+          <div class="kpi-box"><span class="kpi-num" style="color: #2563eb;">${m.dialed || 0}</span><span class="kpi-lbl">Dialed</span></div>
+          <div class="kpi-box"><span class="kpi-num" style="color: #059669;">${m.interested || 0}</span><span class="kpi-lbl">Interested</span></div>
+          <div class="kpi-box"><span class="kpi-num" style="color: #dc2626;">${m.not_interested || 0}</span><span class="kpi-lbl">Declined</span></div>
+          <div class="kpi-box"><span class="kpi-num" style="color: #7c3aed;">${m.wrong_number || 0}</span><span class="kpi-lbl">Wrong Num</span></div>
+          <div class="kpi-box"><span class="kpi-num" style="color: #ea580c;">${m.not_talking || 0}</span><span class="kpi-lbl">Not Talking</span></div>
+          <div class="kpi-box"><span class="kpi-num" style="color: #64748b;">${m.no_answer || 0}</span><span class="kpi-lbl">No Answer</span></div>
+          <div class="kpi-box"><span class="kpi-num" style="color: #e11d48;">${m.dropped || 0}</span><span class="kpi-lbl">Dropped</span></div>
+          <div class="kpi-box"><span class="kpi-num">${m.pending || 0}</span><span class="kpi-lbl">Pending</span></div>
+        `;
+
+        if (calls.length === 0) {
+          batchCallsListContainer.innerHTML = '<div style="text-align: center; padding: 24px; color: var(--text-muted);">No calls executed in this batch yet.</div>';
+          return;
+        }
+
+        batchCallsListContainer.innerHTML = calls.map(entry => {
+          const recUrl = entry.recording_url;
+          const duration = entry.duration || 0;
+          const disp = entry.disposition || 'completed';
+          const custName = entry.customer_name || entry.contact_name || '';
+          const cbTime = entry.callback_time || '';
+          const toNum = entry.phone_number || '';
+
+          let dispTagClass = 'tag-completed';
+          if (disp === 'interested') dispTagClass = 'tag-interested';
+          else if (disp === 'not_interested' || disp === 'wrong_number') dispTagClass = 'tag-declined';
+          else if (disp === 'dropped') dispTagClass = 'tag-declined';
+          else if (disp === 'no_answer' || disp === 'not_talking' || disp === 'busy') dispTagClass = 'tag-noanswer';
+
+          const diag = entry.diagnostic || {};
+          const diagType = diag.classification || 'unknown';
+          let diagBadge = '';
+          if (diagType === 'success') {
+            diagBadge = '<span class="tag tag-interested">OK: BIDIRECTIONAL</span>';
+          } else if (diagType === 'no_incoming_audio') {
+            diagBadge = '<span class="tag tag-declined">NO INCOMING AUDIO</span>';
+          } else if (diagType === 'incoming_audio_exists_gemini_missing') {
+            diagBadge = '<span class="tag tag-noanswer">GEMINI OUTPUT MISSING</span>';
+          } else if (diagType === 'gemini_audio_produced_caller_silence') {
+            diagBadge = '<span class="tag tag-pending">CALLER SILENCE</span>';
+          } else if (diagType === 'everything_stopped_together') {
+            diagBadge = '<span class="tag tag-completed">DISCONNECTED EARLY</span>';
+          }
+
+          const am = diag.audio_metrics || entry.audio_metrics || {};
+          const ws = diag.websocket || {};
+          const hg = diag.hangup || {};
+
+          const eventsHtml = (entry.events && entry.events.length > 0) ? entry.events.map(ev => {
+            const detailNote = ev.details?.telephony_status || ev.details?.cause || ev.details?.error || '';
+            return `
+            <div style="font-size: 0.68rem; padding: 2px 0; border-bottom: 1px dotted #e2e8f0; font-family: var(--mono); display: flex; justify-content: space-between; align-items: baseline;">
+              <div>
+                <span style="font-weight: 600; color: #1e40af;">${escapeHtml(ev.event)}</span>
+                ${detailNote ? `<span style="color: #64748b; font-size: 0.62rem; margin-left: 6px;">(${escapeHtml(detailNote)})</span>` : ''}
+              </div>
+              <span style="color: var(--text-muted);">${ev.timestamp ? ev.timestamp.slice(11, 23) : '--'}</span>
+            </div>`;
+          }).join('') : '<div style="font-size: 0.68rem; color: var(--text-muted);">No milestone events recorded.</div>';
+
+          const turnsHtml = (entry.turns && entry.turns.length > 0) ? entry.turns.map(t => `
+            <div style="margin-top: 4px; padding: 4px 6px; background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 2px;">
+              <span style="font-weight: 600; color: ${t.role === 'agent' ? '#1d4ed8' : '#047857'}; font-size: 0.68rem; text-transform: uppercase;">${t.role === 'agent' ? 'Ananya' : 'Customer'}:</span>
+              <span>${escapeHtml(t.text)}</span>
+            </div>
+          `).join('') : '<div style="color: var(--text-muted); font-size: 0.7rem; margin-top: 4px;">No dialog recorded (unanswered or dropped).</div>';
+
+          const formattedTime = entry.created_at ? new Date(entry.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--';
+
+          return `
+            <div class="log-item">
+              <div class="log-header">
+                <div>
+                  <span class="log-phone">${escapeHtml(toNum || entry.call_uuid.slice(0, 12))}</span>
+                  ${custName ? `<span style="font-weight: 600; margin-left: 6px; color: #1e40af;">${escapeHtml(custName)}</span>` : ''}
+                  <span style="font-size: 0.68rem; color: var(--text-muted); font-family: var(--mono); margin-left: 6px;">(${escapeHtml(entry.call_uuid.slice(0, 8))})</span>
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                  ${diagBadge}
+                  <span class="tag ${dispTagClass}">${escapeHtml(disp.toUpperCase())}</span>
+                  <span style="font-family: var(--mono); color: var(--text-muted); font-size: 0.75rem;">${duration}s</span>
+                </div>
+              </div>
+              <div class="log-details">
+                ${cbTime ? `<span style="color: #047857; font-weight: 600;">Callback: ${escapeHtml(cbTime)}</span>` : ''}
+                ${entry.reason ? `<span>Note: ${escapeHtml(entry.reason)}</span>` : ''}
+                <span>Time: ${formattedTime}</span>
+                <span>In: ${am.inbound_bytes || 0}B (${am.inbound_chunks || 0})</span>
+                <span>Out: ${am.outbound_bytes || 0}B</span>
+                ${ws.close_code ? `<span>WS: ${ws.close_code}</span>` : ''}
+                ${hg.cause ? `<span>Hangup: ${escapeHtml(hg.cause)}</span>` : ''}
+              </div>
+              ${diag.root_cause_summary ? `<div style="font-size: 0.71rem; color: #334155; margin-bottom: 4px; padding: 2px 4px; background: #f1f5f9; border-radius: 2px;"><strong>Diagnostic:</strong> ${escapeHtml(diag.root_cause_summary)}</div>` : ''}
+              ${(recUrl || (duration > 5 && (am.inbound_bytes > 0 || am.outbound_bytes > 0))) ? `
+                <div style="margin: 6px 0;">
+                  <div style="font-size: 0.68rem; color: #475569; font-weight: 600; margin-bottom: 2px;">Call Recording:</div>
+                  <audio controls preload="none" style="width: 100%; height: 32px;" src="/api/recording/${encodeURIComponent(entry.call_uuid)}"></audio>
+                </div>
+              ` : ''}
+              <details style="margin-top: 6px;">
+                <summary style="cursor: pointer; font-size: 0.72rem; color: var(--text-muted);">View Transcript (${(entry.turns || []).length} turns)</summary>
+                <div style="margin-top: 4px;">${turnsHtml}</div>
+              </details>
+              <details style="margin-top: 4px;">
+                <summary style="cursor: pointer; font-size: 0.7rem; color: #2563eb;">View Lifecycle Timeline (${(entry.events || []).length} events)</summary>
+                <div style="margin-top: 4px; padding: 6px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 3px;">
+                  ${eventsHtml}
+                </div>
+              </details>
+            </div>
+          `;
+        }).join('');
+
+      } catch (err) {
+        batchCallsListContainer.innerHTML = `<div style="color: #dc2626; padding: 16px;">Failed to load batch: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    const btnDeleteBatch = document.getElementById('btnDeleteBatch');
+    if (btnDeleteBatch) {
+      btnDeleteBatch.addEventListener('click', async () => {
+        if (!currentBatchDetailId) return;
+        if (!confirm(`Delete batch ${currentBatchDetailId}?`)) return;
+        try {
+          const res = await fetch(`/api/campaign/batches/${encodeURIComponent(currentBatchDetailId)}`, { method: 'DELETE' });
+          const data = await res.json();
+          if (data.ok) {
+            batchDetailView.style.display = 'none';
+            batchesListView.style.display = 'block';
+            fetchBatches();
+            fetchCampaignStatus();
+          }
+        } catch (err) {
+          showAlert('Failed to delete batch: ' + err.message);
+        }
+      });
+    }
+
+    btnBackToBatches.addEventListener('click', () => {
+      batchDetailView.style.display = 'none';
+      batchesListView.style.display = 'block';
+      fetchBatches();
+    });
+
+    btnRefreshBatches.addEventListener('click', fetchBatches);
+
+    // Initial Load & Intervals
+    fetchCrmPendingCalls();
+    fetchCampaignStatus();
+    fetchCompletedLogs();
+    setInterval(fetchCampaignStatus, 1000);
+  </script>
+</body>
+</html>
