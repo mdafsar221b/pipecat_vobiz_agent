@@ -167,19 +167,23 @@ def resolve_end_of_call_disposition(
     if any(k in full_caller for k in ["wrong number", "galat number", "wrong call", "tappu number"]):
         return {"disposition": "wrong_number", "reason": "Caller indicated wrong number"}
 
-    if tracer.disposition == "not_interested" or any(k in full_caller for k in ["not interested", "nahi chahiye", "vaddu", "no interest", "don't want"]):
+    if tracer.disposition == "not_interested" or any(k in full_caller for k in ["not interested", "nahi chahiye", "vaddu", "no interest", "don't want", "detail nahi", "nahi share"]):
         return {"disposition": "not_interested", "reason": tracer.reason or "Caller declined / not interested"}
 
     # Check for interest confirmation
     if tracer.disposition == "interested" or any(k in full_caller for k in ["interested", "haan", "yes", "ha"]):
         name = tracer.customer_name or (doc.get("customer_name") if doc else None)
         cb = tracer.callback_time or (doc.get("callback_time") if doc else None)
-        if name or cb or tracer.disposition == "interested":
+        agent_turns = [t for t in transcripts if t.get("role") == "agent"]
+        full_agent = " ".join(t.get("text", "") for t in agent_turns).lower()
+        farewell_delivered = any(w in full_agent for w in ["goodbye", "have a nice day", "shubh ho", "dhanyavad", "bye"])
+
+        if name or cb or tracer.disposition == "interested" or farewell_delivered:
             return {
                 "disposition": "interested",
-                "customer_name": name,
+                "customer_name": name or (doc.get("metadata", {}).get("customer_name") if doc else None),
                 "callback_time": cb,
-                "reason": tracer.reason or "Caller expressed interest and scheduled callback",
+                "reason": tracer.reason or "Caller expressed interest and concluded conversation",
             }
         else:
             return {

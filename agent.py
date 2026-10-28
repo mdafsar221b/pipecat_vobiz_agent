@@ -31,6 +31,7 @@ from pipecat.transports.websocket.fastapi import (
 
 import db
 import diagnostics
+import vobiz_api
 from vobiz_serializer import VobizFrameSerializer
 
 GEMINI_API_KEYS = [
@@ -144,7 +145,11 @@ async def run_vobiz_agent(
 
         # Allow final goodbye speech to reach caller before stopping pipeline
         async def delayed_terminate():
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(1.2)
+            try:
+                await vobiz_api.hangup_call(call_uuid)
+            except Exception as e:
+                logger.warning(f"Immediate hangup failed for {call_uuid}: {e}")
             if task_ref[0] and not task_ref[0].has_finished():
                 logger.info(f"Executing graceful termination for call {call_uuid}")
                 await task_ref[0].queue_frame(EndFrame())
