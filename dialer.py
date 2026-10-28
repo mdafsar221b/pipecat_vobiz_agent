@@ -29,20 +29,15 @@ class OutboundDialer:
 
     # Fetch pending calls from CRM using the node service
     def fetch_crm_pending(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict[str, Any]]:
-        cmd = ["node", "-e", f"""
-const crm = require('./crm_service.js');
-crm.fetchPendingCalls('{start_date or ''}', '{end_date or ''}').then(res => {{
-    console.log(JSON.stringify(res.calls || []));
-    process.exit(0);
-}}).catch(err => {{
-    console.error(err);
-    process.exit(1);
-}});
-"""]
+        script_path = BASE_DIR / "crm_service.cjs"
+        cmd = ["node", str(script_path), start_date or "", end_date or ""]
         try:
             res = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True, text=True, timeout=25)
             if res.returncode == 0 and res.stdout.strip():
-                return json.loads(res.stdout.strip())
+                data = json.loads(res.stdout.strip())
+                if isinstance(data, dict):
+                    return data.get("calls", [])
+                return data
             logger.warning(f"CRM fetch non-zero exit: {res.stderr}")
         except Exception as exc:
             logger.error(f"CRM pending fetch failed: {exc}")

@@ -1,6 +1,14 @@
 import React, { useState, useMemo } from 'react';
+import {
+  Calendar,
+  Search,
+  PhoneCall,
+  Download,
+  Database,
+  RefreshCw,
+} from 'lucide-react';
 
-// Pending missed calls list from CRM with filtering and queue actions
+// Pending missed calls list from CRM with filtering and batch queue actions
 export default function PendingCallsTab({
   crmCalls = [],
   isLoadingCrm = false,
@@ -17,7 +25,7 @@ export default function PendingCallsTab({
   const [deselectedPhones, setDeselectedPhones] = useState(new Set());
   const [isQueueing, setIsQueueing] = useState(false);
 
-  // Filter calls by unique numbers and search text
+  // Filter calls by unique numbers
   const sourceCalls = useMemo(() => {
     if (!uniqueOnly) return crmCalls;
     const seen = new Set();
@@ -32,6 +40,7 @@ export default function PendingCallsTab({
     return result;
   }, [crmCalls, uniqueOnly]);
 
+  // Filter calls by text query
   const filteredCalls = useMemo(() => {
     const query = searchText.trim().toLowerCase();
     if (!query) return sourceCalls;
@@ -102,7 +111,7 @@ export default function PendingCallsTab({
     const dateRangeStr = startDate === endDate ? startDate : `${startDate} to ${endDate}`;
     const payload = {
       leads,
-      batch_name: `Batch (${dateRangeStr}) - ${leads.length} calls`,
+      batch_name: `CRM Batch (${dateRangeStr}) - ${leads.length} calls`,
       source_filter: `CRM Missed Calls (${dateRangeStr})`,
     };
 
@@ -114,133 +123,147 @@ export default function PendingCallsTab({
   };
 
   const uniqueNote = uniqueOnly
-    ? ` (unique callers, ${crmCalls.length} total pending)`
-    : ` (${crmCalls.length} total pending)`;
+    ? ` (unique callers, ${crmCalls.length} total raw leads)`
+    : ` (${crmCalls.length} total raw leads)`;
 
   return (
-    <div>
-      {/* Filter Bar */}
-      <div className="flex flex-wrap gap-2 items-center mb-3">
-        <div className="flex items-center gap-1">
-          <span className="text-[0.72rem] text-[#64748b] uppercase tracking-wide">From:</span>
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="bg-white border border-[#cbd5e1] text-[#0f172a] text-[0.78rem] p-[5px_8px] rounded-[3px] outline-none focus:border-[#2563eb]"
-          />
+    <div className="space-y-4">
+      {/* Modern Filter Toolbar */}
+      <div className="bg-slate-50/70 border border-slate-200/80 rounded-xl p-3.5 space-y-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Date Picker Group */}
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs shadow-2xs">
+            <Calendar className="w-3.5 h-3.5 text-slate-400" />
+            <span className="text-[10px] font-bold uppercase text-slate-400">From</span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs shadow-2xs">
+            <Calendar className="w-3.5 h-3.5 text-slate-400" />
+            <span className="text-[10px] font-bold uppercase text-slate-400">To</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
+            />
+          </div>
+
+          <div className="flex gap-1.5">
+            <button
+              onClick={setDateToday}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-2xs transition"
+            >
+              Today
+            </button>
+            <button
+              onClick={setDateYesterday}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-2xs transition"
+            >
+              Yesterday
+            </button>
+          </div>
+
+          {/* Search Box */}
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              placeholder="Search by phone, name, campaign source..."
+              className="w-full bg-white border border-slate-200 text-slate-800 text-xs pl-8 pr-3 py-1.5 rounded-lg outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792] shadow-2xs"
+            />
+          </div>
+
+          {/* Unique Checkbox */}
+          <label className="flex items-center gap-2 text-xs text-slate-700 font-medium cursor-pointer select-none bg-white px-2.5 py-1.5 border border-slate-200 rounded-lg shadow-2xs">
+            <input
+              type="checkbox"
+              checked={uniqueOnly}
+              onChange={(e) => setUniqueOnly(e.target.checked)}
+              className="rounded text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
+            />
+            <span>Unique callers only</span>
+          </label>
         </div>
-        <div className="flex items-center gap-1">
-          <span className="text-[0.72rem] text-[#64748b] uppercase tracking-wide">To:</span>
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="bg-white border border-[#cbd5e1] text-[#0f172a] text-[0.78rem] p-[5px_8px] rounded-[3px] outline-none focus:border-[#2563eb]"
-          />
-        </div>
-        <div className="flex gap-1">
+
+        {/* Action Row */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/60">
           <button
-            onClick={setDateToday}
-            className="bg-white border border-[#cbd5e1] text-[#334155] p-[4px_8px] text-[0.72rem] font-semibold rounded-[3px] hover:bg-[#f1f5f9]"
+            onClick={() => onFetchCrmCalls(startDate, endDate)}
+            disabled={isLoadingCrm}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-2xs transition disabled:opacity-40"
           >
-            Today
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingCrm ? 'animate-spin text-[#008792]' : ''}`} />
+            <span>{isLoadingCrm ? 'Querying CRM...' : 'Fetch Calls'}</span>
           </button>
+
           <button
-            onClick={setDateYesterday}
-            className="bg-white border border-[#cbd5e1] text-[#334155] p-[4px_8px] text-[0.72rem] font-semibold rounded-[3px] hover:bg-[#f1f5f9]"
+            onClick={handleQueueSelected}
+            disabled={isQueueing || selectedCalls.length === 0}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white shadow-sm transition disabled:opacity-40 cursor-pointer"
           >
-            Yesterday
+            <Download className="w-3.5 h-3.5" />
+            <span>
+              {isQueueing
+                ? 'Queueing to Dialer...'
+                : `Queue Selected to Dialer (${selectedCalls.length})`}
+            </span>
           </button>
         </div>
-        <input
-          type="text"
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          placeholder="Filter by phone or campaign..."
-          className="w-[170px] bg-white border border-[#cbd5e1] text-[#0f172a] text-[0.78rem] p-[5px_8px] rounded-[3px] outline-none focus:border-[#2563eb]"
-        />
-        <label className="flex items-center gap-[5px] text-[0.75rem] text-[#0f172a] cursor-pointer select-none mx-1 whitespace-nowrap">
-          <input
-            type="checkbox"
-            checked={uniqueOnly}
-            onChange={(e) => setUniqueOnly(e.target.checked)}
-          />
-          <span>Unique numbers only</span>
-        </label>
-        <button
-          onClick={() => onFetchCrmCalls(startDate, endDate)}
-          disabled={isLoadingCrm}
-          className="p-[7px_10px] rounded-[3px] text-[0.78rem] font-semibold text-center transition bg-[#2563eb] hover:bg-[#1d4ed8] text-white disabled:opacity-40"
-        >
-          {isLoadingCrm ? 'Fetching...' : 'Fetch Calls'}
-        </button>
-        <button
-          onClick={handleQueueSelected}
-          disabled={isQueueing || selectedCalls.length === 0}
-          className="ml-auto p-[7px_10px] rounded-[3px] text-[0.78rem] font-semibold text-center transition bg-[#059669] hover:bg-[#047857] text-white disabled:opacity-40"
-        >
-          {isQueueing ? 'Queueing...' : `Queue Selected to Dialer (${selectedCalls.length})`}
-        </button>
       </div>
 
-      {/* Pending Table */}
-      <div className="overflow-x-auto max-h-[480px] border border-[#e2e8f0] rounded-[3px] bg-white">
-        <table className="w-full border-collapse text-left text-[0.75rem]">
+      {/* Pending Calls Table with Nugget High-Contrast Styling */}
+      <div className="overflow-x-auto max-h-[540px] border border-slate-200 rounded-xl bg-white shadow-sm">
+        <table className="w-full border-collapse text-left text-xs">
           <thead>
-            <tr>
-              <th className="w-[30px] sticky top-0 bg-[#f8fafc] text-[#64748b] font-semibold uppercase tracking-wider p-[7px_10px] border-b border-[#e2e8f0] whitespace-nowrap">
+            <tr className="bg-slate-50/90 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px] sticky top-0 z-10 backdrop-blur-sm">
+              <th className="w-10 px-3.5 py-3">
                 <input
                   type="checkbox"
                   checked={allSelected}
                   onChange={toggleSelectAll}
+                  className="rounded text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
                 />
               </th>
-              <th className="sticky top-0 bg-[#f8fafc] text-[#64748b] font-semibold uppercase tracking-wider p-[7px_10px] border-b border-[#e2e8f0] whitespace-nowrap">
-                Customer Number
-              </th>
-              <th className="sticky top-0 bg-[#f8fafc] text-[#64748b] font-semibold uppercase tracking-wider p-[7px_10px] border-b border-[#e2e8f0] whitespace-nowrap">
-                Customer Name
-              </th>
-              <th className="sticky top-0 bg-[#f8fafc] text-[#64748b] font-semibold uppercase tracking-wider p-[7px_10px] border-b border-[#e2e8f0] whitespace-nowrap">
-                Marketing Source
-              </th>
-              <th className="sticky top-0 bg-[#f8fafc] text-[#64748b] font-semibold uppercase tracking-wider p-[7px_10px] border-b border-[#e2e8f0] whitespace-nowrap">
-                Missed Agent
-              </th>
-              <th className="sticky top-0 bg-[#f8fafc] text-[#64748b] font-semibold uppercase tracking-wider p-[7px_10px] border-b border-[#e2e8f0] whitespace-nowrap">
-                Missed Time
-              </th>
-              <th className="sticky top-0 bg-[#f8fafc] text-[#64748b] font-semibold uppercase tracking-wider p-[7px_10px] border-b border-[#e2e8f0] whitespace-nowrap">
-                Ring
-              </th>
-              <th className="sticky top-0 bg-[#f8fafc] text-[#64748b] font-semibold uppercase tracking-wider p-[7px_10px] border-b border-[#e2e8f0] whitespace-nowrap">
-                Status
-              </th>
-              <th className="sticky top-0 bg-[#f8fafc] text-[#64748b] font-semibold uppercase tracking-wider p-[7px_10px] border-b border-[#e2e8f0] whitespace-nowrap">
-                Action
-              </th>
+              <th className="px-3.5 py-3">Customer Number</th>
+              <th className="px-3.5 py-3">Customer Name</th>
+              <th className="px-3.5 py-3">Marketing Source</th>
+              <th className="px-3.5 py-3">Missed Agent</th>
+              <th className="px-3.5 py-3">Missed Time</th>
+              <th className="px-3.5 py-3">Ring</th>
+              <th className="px-3.5 py-3">Status</th>
+              <th className="px-3.5 py-3 text-right">Action</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-slate-100">
             {isLoadingCrm ? (
               <tr>
-                <td colSpan="9" className="text-center text-[#64748b] p-5">
-                  Fetching pending calls from CRM...
+                <td colSpan="9" className="text-center text-slate-400 py-12">
+                  <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
+                  <span className="font-medium text-xs">Querying MongoDB CRM for inbound missed leads...</span>
                 </td>
               </tr>
             ) : crmError ? (
               <tr>
-                <td colSpan="9" className="text-center text-[#f87171] p-5">
-                  Failed to fetch calls. Check real MongoDB connection.
+                <td colSpan="9" className="text-center text-rose-600 py-8 bg-rose-50/40">
+                  <span className="font-semibold text-xs">Failed to load calls from CRM: {crmError}</span>
                 </td>
               </tr>
             ) : filteredCalls.length === 0 ? (
               <tr>
-                <td colSpan="9" className="text-center text-[#64748b] p-6">
-                  {crmCalls.length === 0
-                    ? "Click 'Fetch Calls' to load pending missed calls from CRM..."
-                    : "No pending calls found for this filter."}
+                <td colSpan="9" className="text-center text-slate-400 py-12">
+                  <span className="text-xs font-medium">
+                    {crmCalls.length === 0
+                      ? "Click 'Fetch Calls' above to load pending leads from CRM."
+                      : 'No calls match the current search or unique filter.'}
+                  </span>
                 </td>
               </tr>
             ) : (
@@ -254,44 +277,53 @@ export default function PendingCallsTab({
                 const isChecked = !deselectedPhones.has(c.phone_number);
 
                 return (
-                  <tr key={c.id || idx} className="hover:bg-[#f8fafc]">
-                    <td className="p-[7px_10px] border-b border-[#f1f5f9] whitespace-nowrap">
+                  <tr
+                    key={c.id || idx}
+                    className={`hover:bg-slate-50/80 transition-colors ${
+                      isChecked ? 'bg-[#008792]/5' : ''
+                    }`}
+                  >
+                    <td className="px-3.5 py-3">
                       <input
                         type="checkbox"
                         checked={isChecked}
                         onChange={() => togglePhone(c.phone_number)}
+                        className="rounded text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
                       />
                     </td>
-                    <td className="p-[7px_10px] border-b border-[#f1f5f9] font-mono font-semibold whitespace-nowrap text-[#0f172a]">
+                    <td className="px-3.5 py-3 font-mono font-bold text-slate-900 whitespace-nowrap">
                       {c.phone_number}
                     </td>
-                    <td className="p-[7px_10px] border-b border-[#f1f5f9] whitespace-nowrap text-[#0f172a]">
+                    <td className="px-3.5 py-3 font-medium text-slate-700 whitespace-nowrap">
                       {c.customer_name || '--'}
                     </td>
-                    <td className="p-[7px_10px] border-b border-[#f1f5f9] whitespace-nowrap text-[#0f172a]">
-                      {c.source || c.campaign || '--'}
+                    <td className="px-3.5 py-3 text-slate-600 whitespace-nowrap">
+                      <span className="inline-block bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[11px] font-medium">
+                        {c.source || c.campaign || '--'}
+                      </span>
                     </td>
-                    <td className="p-[7px_10px] border-b border-[#f1f5f9] whitespace-nowrap text-[#0f172a]">
+                    <td className="px-3.5 py-3 text-slate-600 whitespace-nowrap">
                       {(c.missedAgents && c.missedAgents[0]) || 'Queue'}
                     </td>
-                    <td className="p-[7px_10px] border-b border-[#f1f5f9] font-mono text-[#64748b] whitespace-nowrap">
+                    <td className="px-3.5 py-3 font-mono text-slate-500 whitespace-nowrap">
                       {timeStr}
                     </td>
-                    <td className="p-[7px_10px] border-b border-[#f1f5f9] font-mono whitespace-nowrap text-[#0f172a]">
+                    <td className="px-3.5 py-3 font-mono text-slate-500 whitespace-nowrap">
                       {c.duration || 0}s
                     </td>
-                    <td className="p-[7px_10px] border-b border-[#f1f5f9] whitespace-nowrap">
-                      <span className="text-[0.68rem] px-[6px] py-[2px] rounded-[2px] font-mono font-medium bg-[rgba(37,99,235,0.08)] border border-[#3b82f6] text-[#1d4ed8]">
+                    <td className="px-3.5 py-3 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-[#008792]/10 text-[#008792] border border-[#008792]/20">
                         Pending
                       </span>
                     </td>
-                    <td className="p-[7px_10px] border-b border-[#f1f5f9] whitespace-nowrap">
+                    <td className="px-3.5 py-3 text-right whitespace-nowrap">
                       <button
                         onClick={() => onTriggerManualDial(c.phone_number, c.customer_name || '')}
                         disabled={isDialingManual}
-                        className="p-[2px_6px] text-[0.7rem] font-semibold rounded-[3px] bg-white border border-[#cbd5e1] text-[#334155] hover:bg-[#f1f5f9] disabled:opacity-40"
+                        className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-[#008792]/10 hover:text-[#008792] hover:border-[#008792]/30 shadow-2xs transition disabled:opacity-40"
                       >
-                        Dial
+                        <PhoneCall className="w-3 h-3" />
+                        <span>Dial</span>
                       </button>
                     </td>
                   </tr>
@@ -302,11 +334,16 @@ export default function PendingCallsTab({
         </table>
       </div>
 
-      <div className="flex justify-between items-center mt-2 text-[0.72rem] text-[#64748b]">
+      {/* Footer Info */}
+      <div className="flex items-center justify-between text-xs text-slate-500 px-1">
         <span>
-          Showing {filteredCalls.length} of {sourceCalls.length} pending calls{uniqueNote}
+          Showing <strong className="text-slate-800">{filteredCalls.length}</strong> of{' '}
+          <strong className="text-slate-800">{sourceCalls.length}</strong> pending calls{uniqueNote}
         </span>
-        <span>Real CRM: realestate_db</span>
+        <div className="flex items-center gap-1.5 text-slate-400">
+          <Database className="w-3.5 h-3.5" />
+          <span>MongoDB CRM: <strong className="font-mono text-slate-600">realestate_db</strong></span>
+        </div>
       </div>
     </div>
   );

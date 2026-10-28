@@ -1,17 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import Header from './components/Header';
+import { Menu, X } from 'lucide-react';
+import Sidebar from './components/Sidebar';
 import AlertBanner from './components/AlertBanner';
-import LiveCallHud from './components/LiveCallHud';
-import NextCallCard from './components/NextCallCard';
-import CampaignController from './components/CampaignController';
+import LiveConsoleView from './components/LiveConsoleView';
 import PendingCallsTab from './components/PendingCallsTab';
 import BatchesTab from './components/BatchesTab';
 import CompletedLogsTab from './components/CompletedLogsTab';
 
-// Main Swargaseema AI Telephony Console Application
+// Main Swargaseema AI Telephony Console Application with full-width Left Sidebar Layout
 export default function App() {
-  const [activeTab, setActiveTab] = useState('pending');
+  const [activeNav, setActiveNav] = useState('live');
   const [alertMessage, setAlertMessage] = useState('');
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   // Campaign & Live HUD State
   const [campaignData, setCampaignData] = useState({
@@ -225,6 +225,7 @@ export default function App() {
     setManualPhone(phone);
     setManualDialStatus('DIALING');
     setManualDialFeedback(`Call dispatched to ${phone}. Waiting for answer...`);
+    setActiveNav('live');
 
     try {
       const res = await fetch('/api/dial', {
@@ -267,9 +268,7 @@ export default function App() {
         setAlertMessage('');
         fetchCampaignStatus();
         fetchBatches();
-        alert(
-          `Successfully queued ${payload.leads.length} pending calls to the automated outbound dialer.`
-        );
+        setActiveNav('live');
       } else {
         setAlertMessage(`Failed to queue leads: ${data.error}`);
       }
@@ -281,25 +280,48 @@ export default function App() {
   const activeCall = campaignData.active_calls?.[0] || null;
 
   return (
-    <div>
-      <Header
-        isPaused={campaignData.is_paused}
-        isRunning={campaignData.is_running}
-      />
+    <div className="min-h-screen bg-[#fafafa] font-sans text-slate-900 antialiased flex flex-col md:flex-row">
+      {/* Mobile Header Bar */}
+      <div className="md:hidden bg-[#0a0a0a] text-white p-4 flex items-center justify-between border-b border-neutral-800">
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded bg-[#008792] flex items-center justify-center font-bold text-white text-xs">
+            S
+          </div>
+          <span className="font-bold text-sm tracking-tight">Swargaseema Voice AI</span>
+        </div>
+        <button
+          onClick={() => setIsMobileSidebarOpen((v) => !v)}
+          className="p-1 rounded text-neutral-400 hover:text-white"
+        >
+          {isMobileSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+        </button>
+      </div>
 
-      <AlertBanner alertMessage={alertMessage} />
+      {/* Sidebar (Desktop fixed + Mobile drawer) */}
+      <div className={`${isMobileSidebarOpen ? 'block' : 'hidden'} md:block fixed md:static inset-y-0 left-0 z-40`}>
+        <Sidebar
+          activeNav={activeNav}
+          setActiveNav={(nav) => {
+            setActiveNav(nav);
+            setIsMobileSidebarOpen(false);
+          }}
+          campaignData={campaignData}
+          crmCount={crmCalls.length}
+          batchesCount={batches.length}
+          completedCount={completedCalls.length}
+        />
+      </div>
 
-      <div className="grid grid-cols-[430px_1fr] max-[1024px]:grid-cols-1 gap-4 items-start">
-        {/* Left Column: Live HUD & Campaign Controls */}
-        <div>
-          <LiveCallHud
+      {/* Main Content Workspace */}
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 max-w-[1720px] mx-auto w-full overflow-y-auto">
+        <AlertBanner alertMessage={alertMessage} />
+
+        {/* View 1: Live Monitor & Campaign Dialer */}
+        {activeNav === 'live' && (
+          <LiveConsoleView
             activeCall={activeCall}
             lastCompletedCall={campaignData.last_completed_call}
-          />
-
-          <NextCallCard nextCall={campaignData.next_call} />
-
-          <CampaignController
+            nextCall={campaignData.next_call}
             stats={campaignData.stats}
             isRunning={campaignData.is_running}
             isPaused={campaignData.is_paused}
@@ -319,87 +341,54 @@ export default function App() {
             onRefreshCampaign={fetchCampaignStatus}
             onRefreshBatches={fetchBatches}
           />
-        </div>
+        )}
 
-        {/* Right Column: CRM Leads, Batches & Transcripts */}
-        <div>
-          <div className="bg-white border border-[#e2e8f0] rounded-[4px] p-[14px] mb-[14px]">
-            {/* Tab Navigation */}
-            <div className="flex gap-[2px] border-b border-[#e2e8f0] mb-3">
-              <button
-                onClick={() => {
-                  setActiveTab('pending');
-                }}
-                className={`p-[6px_14px] bg-transparent border-none border-b-2 text-[0.78rem] font-semibold cursor-pointer ${
-                  activeTab === 'pending'
-                    ? 'text-[#0f172a] border-b-[#2563eb]'
-                    : 'text-[#64748b] border-b-transparent hover:text-[#0f172a]'
-                }`}
-              >
+        {/* View 2: CRM Missed Calls */}
+        {activeNav === 'pending' && (
+          <div className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+            <div className="mb-4">
+              <h2 className="text-base font-bold text-slate-900 tracking-tight">
                 CRM Missed Calls (Pending Queue)
-              </button>
-              <button
-                onClick={() => {
-                  setActiveTab('batches');
-                  fetchBatches();
-                }}
-                className={`p-[6px_14px] bg-transparent border-none border-b-2 text-[0.78rem] font-semibold cursor-pointer ${
-                  activeTab === 'batches'
-                    ? 'text-[#0f172a] border-b-[#2563eb]'
-                    : 'text-[#64748b] border-b-transparent hover:text-[#0f172a]'
-                }`}
-              >
-                Campaign Batches
-              </button>
-              <button
-                onClick={() => {
-                  setActiveTab('completed');
-                  fetchCompletedLogs();
-                }}
-                className={`p-[6px_14px] bg-transparent border-none border-b-2 text-[0.78rem] font-semibold cursor-pointer ${
-                  activeTab === 'completed'
-                    ? 'text-[#0f172a] border-b-[#2563eb]'
-                    : 'text-[#64748b] border-b-transparent hover:text-[#0f172a]'
-                }`}
-              >
-                Completed Calls &amp; Transcripts
-              </button>
+              </h2>
+              <p className="text-xs text-slate-500">
+                Filter and queue inbound missed calls from the real estate CRM into outbound campaigns
+              </p>
             </div>
-
-            {/* Tab 1: Pending Calls */}
-            {activeTab === 'pending' && (
-              <PendingCallsTab
-                crmCalls={crmCalls}
-                isLoadingCrm={isLoadingCrm}
-                crmError={crmError}
-                onFetchCrmCalls={fetchCrmPendingCalls}
-                onQueueLeads={handleQueueLeads}
-                onTriggerManualDial={handleTriggerManualDial}
-                isDialingManual={isDialingManual}
-              />
-            )}
-
-            {/* Tab 2: Batches */}
-            {activeTab === 'batches' && (
-              <BatchesTab
-                batches={batches}
-                isLoadingBatches={isLoadingBatches}
-                onRefreshBatches={fetchBatches}
-                onRefreshCampaign={fetchCampaignStatus}
-              />
-            )}
-
-            {/* Tab 3: Completed Logs */}
-            {activeTab === 'completed' && (
-              <CompletedLogsTab
-                completedCalls={completedCalls}
-                isLoadingLogs={isLoadingLogs}
-                onRefreshLogs={fetchCompletedLogs}
-              />
-            )}
+            <PendingCallsTab
+              crmCalls={crmCalls}
+              isLoadingCrm={isLoadingCrm}
+              crmError={crmError}
+              onFetchCrmCalls={fetchCrmPendingCalls}
+              onQueueLeads={handleQueueLeads}
+              onTriggerManualDial={handleTriggerManualDial}
+              isDialingManual={isDialingManual}
+            />
           </div>
-        </div>
-      </div>
+        )}
+
+        {/* View 3: Campaign Batches */}
+        {activeNav === 'batches' && (
+          <div className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+            <BatchesTab
+              batches={batches}
+              isLoadingBatches={isLoadingBatches}
+              onRefreshBatches={fetchBatches}
+              onRefreshCampaign={fetchCampaignStatus}
+            />
+          </div>
+        )}
+
+        {/* View 4: Completed Call Logs & Transcripts */}
+        {activeNav === 'completed' && (
+          <div className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+            <CompletedLogsTab
+              completedCalls={completedCalls}
+              isLoadingLogs={isLoadingLogs}
+              onRefreshLogs={fetchCompletedLogs}
+            />
+          </div>
+        )}
+      </main>
     </div>
   );
 }

@@ -372,4 +372,4 @@ async def list_calls(limit: int = 50):
     return db.get_recent_calls(limit=limit)
 
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=PORT, reload=False)
+    uvicorn.run("server:app", host="0.0.0.0", port=PORT, reload=True)
