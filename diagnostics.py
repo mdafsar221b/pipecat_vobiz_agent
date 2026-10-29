@@ -39,6 +39,12 @@ class CallTracer:
         self.customer_name: Optional[str] = None
         self.callback_time: Optional[str] = None
         self.reason: Optional[str] = None
+        self.t_answer: Optional[float] = None
+        self.t_media_ready: Optional[float] = None
+        self.t_gemini_ready: Optional[float] = None
+        self.t_greeting_start: Optional[float] = None
+        self.t_first_chunk: Optional[float] = None
+        self.t_greeting_done: Optional[float] = None
         self.turns_count = 0
 
     # Record a milestone lifecycle event with timestamp

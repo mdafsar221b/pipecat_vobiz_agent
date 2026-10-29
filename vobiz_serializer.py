@@ -1,9 +1,10 @@
+import asyncio
 import json
 from typing import Optional
 from loguru import logger
 import diagnostics
 
-from pipecat.frames.frames import AudioRawFrame, Frame, InputAudioRawFrame
+from pipecat.frames.frames import AudioRawFrame, Frame, InputAudioRawFrame, InterruptionFrame
 from pipecat.serializers.vobiz import (
     VobizFrameSerializer as BaseVobizFrameSerializer,
     parse_vobiz_start,
@@ -26,6 +27,8 @@ class VobizFrameSerializer(BaseVobizFrameSerializer):
             auth_token=auth_token,
             params=params,
         )
+        self.stream_ready_event = asyncio.Event()
+        self.is_greeting_playing = False
 
     # Set call identifiers dynamically
     def set_call_identifiers(self, call_uuid: str, stream_id: Optional[str] = None) -> None:
@@ -35,6 +38,8 @@ class VobizFrameSerializer(BaseVobizFrameSerializer):
 
     # Serialize frames to Vobiz JSON with outbound audio diagnostic tracking
     async def serialize(self, frame: Frame) -> str | bytes | None:
+        if isinstance(frame, InterruptionFrame) and self.is_greeting_playing:
+            return None
         if isinstance(frame, AudioRawFrame):
             data = frame.audio
             if data and self._call_id:
@@ -53,6 +58,7 @@ class VobizFrameSerializer(BaseVobizFrameSerializer):
                     st_id = msg.get("streamId") or start_data.get("streamId")
                     if st_id:
                         self._stream_id = st_id
+                    self.stream_ready_event.set()
                     if self._call_id:
                         diagnostics.get_tracer(self._call_id).record_event(
                             "vobiz_stream_connected",

@@ -127,12 +127,16 @@ async def answer_call(request: Request):
     to_number = params.get("To") or params.get("to") or ""
     from_number = params.get("From") or params.get("from") or ""
 
+    t_answer = time.time()
+    call_short = call_uuid[:8] if call_uuid else "unknown"
+    logger.info(f"[TIMING] [{call_short}] 1. Call answered at {t_answer:.3f} ({datetime.now().strftime('%H:%M:%S.%f')[:-3]})")
     logger.info(f"Vobiz Answer Callback: call_uuid={call_uuid}, to={to_number}, from={from_number}")
     batch_id = params.get("batch_id") or (dialer.active_call.get("batch_id") if dialer.active_call else None) or dialer.current_batch_id
     db.record_call_start(call_uuid, phone_number=to_number, batch_id=batch_id, metadata=params)
     dialer.set_call_status(call_uuid, "in_call")
     tracer = diagnostics.get_tracer(call_uuid, phone_number=to_number, batch_id=batch_id)
-    tracer.record_event("call_answered", {"to": to_number, "from": from_number, "call_id": call_uuid})
+    tracer.t_answer = t_answer
+    tracer.record_event("call_answered", {"timestamp": t_answer, "to": to_number, "from": from_number, "call_id": call_uuid})
 
     public_url = get_public_url()
     status_callback = xml_escape(f"{public_url}/stream-status")

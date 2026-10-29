@@ -1,7 +1,10 @@
 import asyncio
+import base64
 from datetime import datetime, timezone, timedelta
+import json
 import os
 from pathlib import Path
+import time
 from typing import Any, Callable, Dict, List, Optional
 from dotenv import load_dotenv
 from loguru import logger
@@ -53,6 +56,12 @@ AGENT_GREETING = os.getenv(
     "నమస్తే అండి! నేను అనన్య స్వర్గసీమ నుంచి మాట్లాడుతున్నాను. మీరు మాకు మిస్డ్ కాల్ చేశారు. మీకు స్వర్గసీమ ప్రాజెక్ట్స్ లో ఇంట్రెస్ట్ ఉందా అండి?",
 )
 AGENT_SYSTEM_PROMPT = os.getenv("AGENT_SYSTEM_PROMPT", "")
+
+GREETING_AUDIO_PATH = BASE_DIR / "assets" / "greeting_telugu_16k.pcm"
+CACHED_GREETING_PCM: bytes = b""
+if GREETING_AUDIO_PATH.exists():
+    CACHED_GREETING_PCM = GREETING_AUDIO_PATH.read_bytes()
+    logger.info(f"Loaded cached greeting audio: {len(CACHED_GREETING_PCM)} bytes ({len(CACHED_GREETING_PCM)/32000:.2f}s)")
 
 # Build system instruction with dynamic real-time date context
 def build_system_instruction() -> str:
@@ -228,6 +237,16 @@ async def run_vobiz_agent(
         tools=tools,
     )
 
+    # Wrap session ready to record exact Gemini handshake timing
+    orig_handle_session_ready = llm._handle_session_ready
+    async def wrapped_session_ready(session):
+        t_gemini = time.time()
+        t_ans = tracer.t_answer or t_gemini
+        logger.info(f"[TIMING] [{call_uuid[:8]}] 3. Gemini session ready at {t_gemini:.3f} (+{t_gemini - t_ans:.3f}s from answer)")
+        tracer.record_event("gemini_session_ready", {"elapsed_from_answer": round(t_gemini - t_ans, 3)})
+        return await orig_handle_session_ready(session)
+    llm._handle_session_ready = wrapped_session_ready
+
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
@@ -269,23 +288,90 @@ async def run_vobiz_agent(
         ),
     )
     task_ref[0] = task
+    greeting_task: Optional[asyncio.Task] = None
+
+    # Stream pre-cached opening greeting immediately when media stream connects
+    async def play_opening_greeting():
+        t_ans = tracer.t_answer or time.time()
+        await serializer.stream_ready_event.wait()
+        t_media = time.time()
+        logger.info(f"[TIMING] [{call_uuid[:8]}] 2. Media-stream ready at {t_media:.3f} (+{t_media - t_ans:.3f}s from answer)")
+        tracer.record_event("media_stream_ready", {"elapsed_from_answer": round(t_media - t_ans, 3), "stream_id": serializer._stream_id})
+
+        if not CACHED_GREETING_PCM:
+            logger.warning(f"No cached greeting audio available for {call_uuid}")
+            return
+
+        serializer.is_greeting_playing = True
+        await llm.pause_processing_frames()
+
+        t_greet_start = time.time()
+        logger.info(f"[TIMING] [{call_uuid[:8]}] 4. Greeting playback start at {t_greet_start:.3f} (+{t_greet_start - t_ans:.3f}s from answer)")
+        tracer.record_event("greeting_playback_start", {"elapsed_from_answer": round(t_greet_start - t_ans, 3)})
+
+        # Seed conversation context with opening greeting so Gemini does not duplicate it
+        context.add_message({
+            "role": "assistant",
+            "content": AGENT_GREETING,
+        })
+        db.append_transcript(call_uuid, "agent", AGENT_GREETING)
+        tracer.turns_count += 1
+        tracer.record_event("agent_turn_completed", {"text": AGENT_GREETING[:60]})
+
+        chunk_size = 1600
+        first_chunk_sent = False
+        stream_id = serializer._stream_id
+
+        for i in range(0, len(CACHED_GREETING_PCM), chunk_size):
+            if call_ended or websocket.client_state.name != "CONNECTED":
+                break
+
+            chunk = CACHED_GREETING_PCM[i : i + chunk_size]
+            payload = base64.b64encode(chunk).decode("utf-8")
+            msg = json.dumps({
+                "event": "playAudio",
+                "media": {
+                    "contentType": "audio/x-l16",
+                    "sampleRate": 16000,
+                    "payload": payload,
+                },
+                "streamId": stream_id,
+            })
+
+            try:
+                await websocket.send_text(msg)
+                tracer.record_audio_out(len(chunk), sample_rate=16000)
+            except Exception as exc:
+                logger.warning(f"Greeting streaming interrupted for {call_uuid}: {exc}")
+                break
+
+            if not first_chunk_sent:
+                first_chunk_sent = True
+                t_first = time.time()
+                logger.info(f"[TIMING] [{call_uuid[:8]}] 5. First audio chunk sent at {t_first:.3f} (+{t_first - t_ans:.3f}s from answer)")
+                tracer.record_event("first_audio_chunk_sent", {"elapsed_from_answer": round(t_first - t_ans, 3)})
+
+            await asyncio.sleep(0.05)
+
+        serializer.is_greeting_playing = False
+        t_greet_end = time.time()
+        logger.info(f"[TIMING] [{call_uuid[:8]}] 6. Greeting completed at {t_greet_end:.3f} (+{t_greet_end - t_ans:.3f}s from answer)")
+        tracer.record_event("greeting_completed", {"elapsed_from_answer": round(t_greet_end - t_ans, 3)})
+
+        # Resume Gemini processing for caller speech captured during or after greeting
+        await llm.resume_processing_frames()
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport_instance, client):
         logger.info(f"Vobiz WebSocket connected for call {call_uuid}")
-        tracer.record_event("gemini_session_ready", {"model": GEMINI_MODEL, "voice": GEMINI_VOICE})
-        # Prompt model to begin conversation with configured opening greeting
-        context.add_message({
-            "role": "developer",
-            "content": (
-                f"Begin the call now. Speak the exact opening Telugu greeting: '{AGENT_GREETING}'"
-            ),
-        })
-        await task.queue_frames([LLMRunFrame()])
+        nonlocal greeting_task
+        greeting_task = asyncio.create_task(play_opening_greeting())
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport_instance, client):
         logger.info(f"Vobiz WebSocket disconnected for call {call_uuid}")
+        if greeting_task and not greeting_task.done():
+            greeting_task.cancel()
         if hangup_timer[0] and not hangup_timer[0].done():
             hangup_timer[0].cancel()
         await task.cancel()
