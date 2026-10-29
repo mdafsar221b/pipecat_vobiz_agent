@@ -147,7 +147,6 @@ async def answer_call(request: Request):
 
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Record recordSession="true" maxLength="3600" redirect="false" callbackUrl="{rec_callback}" callbackMethod="POST"/>
     <Stream bidirectional="true"
             audioTrack="inbound"
             keepCallAlive="true"
@@ -156,6 +155,7 @@ async def answer_call(request: Request):
             statusCallbackMethod="POST">
         {ws_stream_url}
     </Stream>
+    <Record recordSession="true" playBeep="false" maxLength="3600" redirect="false" callbackUrl="{rec_callback}" callbackMethod="POST"/>
     <Hangup/>
 </Response>"""
     return Response(content=xml_content, media_type="application/xml")
