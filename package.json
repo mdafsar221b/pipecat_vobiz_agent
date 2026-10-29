@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node dev.js",
-    "build": "npm run build --prefix frontend"
+    "build": "npm run build --prefix frontend",
+    "start": "python server.py"
   }
 }
