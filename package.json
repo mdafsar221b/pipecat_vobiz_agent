@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node dev.js",
     "build": "npm run build --prefix frontend",
+    "install:all": "npm install && npm install --prefix frontend",
     "start": "python server.py"
   }
 }
