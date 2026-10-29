@@ -43,75 +43,90 @@ console.log('  Backend Server:  http://127.0.0.1:8000');
 console.log('  Frontend Vite:   http://localhost:3000');
 console.log('='.repeat(60));
 
-// Spawn cloudflared tunnel if binary exists
-const cloudflaredExe = path.join(__dirname, 'cloudflared.exe');
-let tunnelProcess = null;
+// Start services sequentially: tunnel first, then backend and frontend
+async function main() {
+  const cloudflaredExe = path.join(__dirname, 'cloudflared.exe');
+  let tunnelProcess = null;
+  let backend = null;
+  let frontend = null;
 
-if (fs.existsSync(cloudflaredExe)) {
-  tunnelProcess = spawn(cloudflaredExe, ['tunnel', '--url', 'http://127.0.0.1:8000'], {
-    cwd: __dirname,
-    shell: false,
-  });
-
-  const onTunnelOutput = (data) => {
-    const text = data.toString();
-    const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
-    if (match) {
-      updateEnvPublicUrl(match[0]);
+  const shutdown = () => {
+    console.log('\nShutting down servers...');
+    try {
+      if (process.platform === 'win32') {
+        if (backend?.pid) spawn('taskkill', ['/pid', backend.pid.toString(), '/f', '/t'], { shell: true });
+        if (frontend?.pid) spawn('taskkill', ['/pid', frontend.pid.toString(), '/f', '/t'], { shell: true });
+        if (tunnelProcess?.pid) spawn('taskkill', ['/pid', tunnelProcess.pid.toString(), '/f', '/t'], { shell: true });
+      } else {
+        backend?.kill('SIGTERM');
+        frontend?.kill('SIGTERM');
+        tunnelProcess?.kill('SIGTERM');
+      }
+    } catch {
+      // Process cleanup completed
     }
+    process.exit(0);
   };
 
-  tunnelProcess.stdout.on('data', onTunnelOutput);
-  tunnelProcess.stderr.on('data', onTunnelOutput);
-}
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 
-// Spawn Python backend server
-const backend = spawn(pythonExe, ['server.py'], {
-  cwd: __dirname,
-  stdio: 'inherit',
-  shell: false,
-});
+  // 1. Initialize tunnel if available
+  if (fs.existsSync(cloudflaredExe)) {
+    console.log('  Establishing Cloudflare tunnel...');
+    tunnelProcess = spawn(cloudflaredExe, ['tunnel', '--url', 'http://127.0.0.1:8000'], {
+      cwd: __dirname,
+      shell: false,
+    });
 
-// Spawn Vite frontend dev server
-const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const frontend = spawn(npmCmd, ['run', 'dev'], {
-  cwd: path.join(__dirname, 'frontend'),
-  stdio: 'inherit',
-  shell: process.platform === 'win32',
-});
+    const waitForTunnel = new Promise((resolve) => {
+      const timeout = setTimeout(() => resolve(null), 8000);
+      const onData = (data) => {
+        const text = data.toString();
+        const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+        if (match) {
+          clearTimeout(timeout);
+          updateEnvPublicUrl(match[0]);
+          process.env.PUBLIC_URL = match[0];
+          resolve(match[0]);
+        }
+      };
+      tunnelProcess.stdout.on('data', onData);
+      tunnelProcess.stderr.on('data', onData);
+    });
 
-// Terminate child processes on exit
-function shutdown() {
-  console.log('\nShutting down servers...');
-  try {
-    if (process.platform === 'win32') {
-      if (backend?.pid) spawn('taskkill', ['/pid', backend.pid.toString(), '/f', '/t'], { shell: true });
-      if (frontend?.pid) spawn('taskkill', ['/pid', frontend.pid.toString(), '/f', '/t'], { shell: true });
-      if (tunnelProcess?.pid) spawn('taskkill', ['/pid', tunnelProcess.pid.toString(), '/f', '/t'], { shell: true });
-    } else {
-      backend?.kill('SIGTERM');
-      frontend?.kill('SIGTERM');
-      tunnelProcess?.kill('SIGTERM');
+    await waitForTunnel;
+  }
+
+  // 2. Spawn Python backend server
+  backend = spawn(pythonExe, ['server.py'], {
+    cwd: __dirname,
+    stdio: 'inherit',
+    shell: false,
+    env: { ...process.env },
+  });
+
+  // 3. Spawn Vite frontend dev server
+  const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  frontend = spawn(npmCmd, ['run', 'dev'], {
+    cwd: path.join(__dirname, 'frontend'),
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+
+  backend.on('exit', (code) => {
+    if (code !== 0 && code !== null) {
+      console.error(`Backend exited with code ${code}`);
+      shutdown();
     }
-  } catch {
-    // Process cleanup completed
-  }
-  process.exit(0);
+  });
+
+  frontend.on('exit', (code) => {
+    if (code !== 0 && code !== null) {
+      console.error(`Frontend exited with code ${code}`);
+      shutdown();
+    }
+  });
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
-
-backend.on('exit', (code) => {
-  if (code !== 0 && code !== null) {
-    console.error(`Backend exited with code ${code}`);
-    shutdown();
-  }
-});
-
-frontend.on('exit', (code) => {
-  if (code !== 0 && code !== null) {
-    console.error(`Frontend exited with code ${code}`);
-    shutdown();
-  }
-});
+main();

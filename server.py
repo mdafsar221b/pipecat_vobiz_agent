@@ -25,8 +25,22 @@ from dialer import dialer
 
 BASE_DIR = Path(__file__).parent
 PORT = int(os.getenv("PORT", os.getenv("HTTP_PORT", "8000")))
-PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
 STREAM_CONTENT_TYPE = os.getenv("STREAM_CONTENT_TYPE", "audio/x-l16;rate=16000")
+
+# Resolve active public URL dynamically from environment or .env file
+def get_public_url() -> str:
+    env_file = BASE_DIR / ".env"
+    if env_file.exists():
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("PUBLIC_URL="):
+                        val = line.split("=", 1)[1].strip().strip('"').strip("'").rstrip("/")
+                        if val:
+                            return val
+        except Exception:
+            pass
+    return os.getenv("PUBLIC_URL", "").rstrip("/")
 
 # XML escape text for valid Vobiz response XML
 def xml_escape(value: str) -> str:
@@ -34,7 +48,8 @@ def xml_escape(value: str) -> str:
 
 # Generate WebSocket URL pointing to this server
 def get_ws_url(path_with_query: str) -> str:
-    base = PUBLIC_URL.replace("https://", "wss://").replace("http://", "ws://")
+    pub = get_public_url()
+    base = pub.replace("https://", "wss://").replace("http://", "ws://")
     full_url = f"{base}{path_with_query}"
     return xml_escape(full_url)
 
@@ -42,7 +57,7 @@ def get_ws_url(path_with_query: str) -> str:
 async def lifespan(app: FastAPI):
     logger.info("Initializing database and agent components...")
     db.get_collection()
-    logger.info(f"Pipecat Vobiz Server active at {PUBLIC_URL or f'http://127.0.0.1:{PORT}'}")
+    logger.info(f"Pipecat Vobiz Server active at {get_public_url() or f'http://127.0.0.1:{PORT}'}")
     yield
     logger.info("Server shutting down cleanly...")
 
@@ -79,7 +94,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "pipecat-vobiz-gemini-live",
-        "public_url": PUBLIC_URL,
+        "public_url": get_public_url(),
     }
 
 # Extract request parameters from forms, json, or query parameters
@@ -119,8 +134,9 @@ async def answer_call(request: Request):
     tracer = diagnostics.get_tracer(call_uuid, phone_number=to_number, batch_id=batch_id)
     tracer.record_event("call_answered", {"to": to_number, "from": from_number, "call_id": call_uuid})
 
-    status_callback = xml_escape(f"{PUBLIC_URL}/stream-status")
-    rec_callback = xml_escape(f"{PUBLIC_URL}/recording-callback?batch_id={batch_id or ''}&to={to_number}")
+    public_url = get_public_url()
+    status_callback = xml_escape(f"{public_url}/stream-status")
+    rec_callback = xml_escape(f"{public_url}/recording-callback?batch_id={batch_id or ''}&to={to_number}")
     ws_stream_url = get_ws_url(f"/ws?call_uuid={call_uuid}&to={to_number}&batch_id={batch_id or ''}")
 
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -231,8 +247,9 @@ async def trigger_dial(request: Request):
     if not to_number:
         return JSONResponse(status_code=400, content={"ok": False, "error": "Missing phone number"})
 
-    answer_url = f"{PUBLIC_URL}/answer"
-    hangup_url = f"{PUBLIC_URL}/hangup"
+    public_url = get_public_url()
+    answer_url = f"{public_url}/answer"
+    hangup_url = f"{public_url}/hangup"
     from_number = payload.get("from")
 
     try:
@@ -282,7 +299,7 @@ async def queue_campaign_leads(request: Request):
 # Start OBD automated calling
 @app.post("/api/campaign/start")
 async def start_campaign():
-    dialer.start(PUBLIC_URL)
+    dialer.start(get_public_url())
     return {"ok": True, "status": dialer.status}
 
 # Pause OBD automated calling
@@ -294,7 +311,7 @@ async def pause_campaign():
 # Resume OBD automated calling
 @app.post("/api/campaign/resume")
 async def resume_campaign():
-    dialer.resume(PUBLIC_URL)
+    dialer.resume(get_public_url())
     return {"ok": True, "status": dialer.status}
 
 # Stop OBD automated calling
