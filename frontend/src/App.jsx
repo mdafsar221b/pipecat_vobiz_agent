@@ -233,7 +233,13 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to: phone, contact_name: contactName }),
       });
-      const data = await res.json();
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        const text = await res.text().catch(() => '');
+        data = { ok: false, error: text || `HTTP ${res.status}` };
+      }
       if (!res.ok || !data.ok) {
         const errMsg = data.error
           ? typeof data.error === 'object'
@@ -280,25 +286,25 @@ export default function App() {
   const activeCall = campaignData.active_calls?.[0] || null;
 
   return (
-    <div className="min-h-screen bg-[#fafafa] font-sans text-slate-900 antialiased flex flex-col md:flex-row">
+    <div className="h-screen w-screen overflow-hidden bg-white font-sans text-slate-900 antialiased flex flex-col md:flex-row">
       {/* Mobile Header Bar */}
-      <div className="md:hidden bg-[#0a0a0a] text-white p-4 flex items-center justify-between border-b border-neutral-800">
+      <div className="md:hidden bg-[#0a0a0a] text-white p-3 flex items-center justify-between border-b border-neutral-800 flex-shrink-0">
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded bg-[#008792] flex items-center justify-center font-bold text-white text-xs">
+          <div className="w-6 h-6 bg-[#008792] flex items-center justify-center font-bold text-white text-xs">
             S
           </div>
           <span className="font-bold text-sm tracking-tight">Swargaseema Voice AI</span>
         </div>
         <button
           onClick={() => setIsMobileSidebarOpen((v) => !v)}
-          className="p-1 rounded text-neutral-400 hover:text-white"
+          className="p-1 text-neutral-400 hover:text-white"
         >
           {isMobileSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
         </button>
       </div>
 
       {/* Sidebar (Desktop fixed + Mobile drawer) */}
-      <div className={`${isMobileSidebarOpen ? 'block' : 'hidden'} md:block fixed md:static inset-y-0 left-0 z-40`}>
+      <div className={`${isMobileSidebarOpen ? 'block' : 'hidden'} md:block fixed md:static inset-y-0 left-0 z-40 h-full flex-shrink-0`}>
         <Sidebar
           activeNav={activeNav}
           setActiveNav={(nav) => {
@@ -312,41 +318,43 @@ export default function App() {
         />
       </div>
 
-      {/* Main Content Workspace */}
-      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 max-w-[1720px] mx-auto w-full overflow-y-auto">
+      {/* Main Content Workspace - Edge-to-edge slate layout */}
+      <main className="flex-1 h-screen min-w-0 p-0 flex flex-col overflow-hidden bg-white">
         <AlertBanner alertMessage={alertMessage} />
 
         {/* View 1: Live Monitor & Campaign Dialer */}
         {activeNav === 'live' && (
-          <LiveConsoleView
-            activeCall={activeCall}
-            lastCompletedCall={campaignData.last_completed_call}
-            nextCall={campaignData.next_call}
-            stats={campaignData.stats}
-            isRunning={campaignData.is_running}
-            isPaused={campaignData.is_paused}
-            activeCalls={campaignData.active_calls || []}
-            onStartCampaign={handleStartCampaign}
-            onPauseCampaign={handlePauseCampaign}
-            onResumeCampaign={handleResumeCampaign}
-            onStopCampaign={handleStopCampaign}
-            onResetQueue={handleResetQueue}
-            onRetryFailed={handleRetryFailed}
-            onTriggerManualDial={handleTriggerManualDial}
-            manualDialStatus={manualDialStatus}
-            manualDialFeedback={manualDialFeedback}
-            manualPhone={manualPhone}
-            setManualPhone={setManualPhone}
-            isDialingManual={isDialingManual}
-            onRefreshCampaign={fetchCampaignStatus}
-            onRefreshBatches={fetchBatches}
-          />
+          <div className="flex-1 min-h-0 flex flex-col">
+            <LiveConsoleView
+              activeCall={activeCall}
+              lastCompletedCall={campaignData.last_completed_call}
+              nextCall={campaignData.next_call}
+              stats={campaignData.stats}
+              isRunning={campaignData.is_running}
+              isPaused={campaignData.is_paused}
+              activeCalls={campaignData.active_calls || []}
+              onStartCampaign={handleStartCampaign}
+              onPauseCampaign={handlePauseCampaign}
+              onResumeCampaign={handleResumeCampaign}
+              onStopCampaign={handleStopCampaign}
+              onResetQueue={handleResetQueue}
+              onRetryFailed={handleRetryFailed}
+              onTriggerManualDial={handleTriggerManualDial}
+              manualDialStatus={manualDialStatus}
+              manualDialFeedback={manualDialFeedback}
+              manualPhone={manualPhone}
+              setManualPhone={setManualPhone}
+              isDialingManual={isDialingManual}
+              onRefreshCampaign={fetchCampaignStatus}
+              onRefreshBatches={fetchBatches}
+            />
+          </div>
         )}
 
         {/* View 2: CRM Missed Calls */}
         {activeNav === 'pending' && (
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
-            <div className="mb-4">
+          <div className="bg-white p-4 flex-1 min-h-0 overflow-y-auto">
+            <div className="mb-3">
               <h2 className="text-base font-bold text-slate-900 tracking-tight">
                 CRM Missed Calls (Pending Queue)
               </h2>
@@ -368,7 +376,7 @@ export default function App() {
 
         {/* View 3: Campaign Batches */}
         {activeNav === 'batches' && (
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+          <div className="bg-white p-4 flex-1 min-h-0 overflow-y-auto">
             <BatchesTab
               batches={batches}
               isLoadingBatches={isLoadingBatches}
@@ -380,7 +388,7 @@ export default function App() {
 
         {/* View 4: Completed Call Logs & Transcripts */}
         {activeNav === 'completed' && (
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+          <div className="bg-white p-4 flex-1 min-h-0 overflow-y-auto">
             <CompletedLogsTab
               completedCalls={completedCalls}
               isLoadingLogs={isLoadingLogs}

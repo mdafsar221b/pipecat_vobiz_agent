@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Detect python executable (.venv if present, otherwise system python)
+// Detect python executable from venv or system
 function getPythonExecutable() {
   const winVenv = path.join(__dirname, '.venv', 'Scripts', 'python.exe');
   const posixVenv = path.join(__dirname, '.venv', 'bin', 'python');
@@ -20,6 +20,21 @@ function getPythonExecutable() {
   return process.platform === 'win32' ? 'python' : 'python3';
 }
 
+// Update PUBLIC_URL in .env file with active tunnel URL
+function updateEnvPublicUrl(url) {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    let envContent = fs.readFileSync(envPath, 'utf8');
+    if (envContent.includes('PUBLIC_URL=')) {
+      envContent = envContent.replace(/^PUBLIC_URL=.*$/m, `PUBLIC_URL=${url}`);
+    } else {
+      envContent += `\nPUBLIC_URL=${url}\n`;
+    }
+    fs.writeFileSync(envPath, envContent, 'utf8');
+    console.log(`  Updated PUBLIC_URL: ${url}`);
+  }
+}
+
 const pythonExe = getPythonExecutable();
 console.log('='.repeat(60));
 console.log('  Starting Pipecat Vobiz Voice AI Suite');
@@ -28,7 +43,29 @@ console.log('  Backend Server:  http://127.0.0.1:8000');
 console.log('  Frontend Vite:   http://localhost:3000');
 console.log('='.repeat(60));
 
-// Spawn Python backend server without cmd shell to avoid space splitting
+// Spawn cloudflared tunnel if binary exists
+const cloudflaredExe = path.join(__dirname, 'cloudflared.exe');
+let tunnelProcess = null;
+
+if (fs.existsSync(cloudflaredExe)) {
+  tunnelProcess = spawn(cloudflaredExe, ['tunnel', '--url', 'http://127.0.0.1:8000'], {
+    cwd: __dirname,
+    shell: false,
+  });
+
+  const onTunnelOutput = (data) => {
+    const text = data.toString();
+    const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+    if (match) {
+      updateEnvPublicUrl(match[0]);
+    }
+  };
+
+  tunnelProcess.stdout.on('data', onTunnelOutput);
+  tunnelProcess.stderr.on('data', onTunnelOutput);
+}
+
+// Spawn Python backend server
 const backend = spawn(pythonExe, ['server.py'], {
   cwd: __dirname,
   stdio: 'inherit',
@@ -43,15 +80,18 @@ const frontend = spawn(npmCmd, ['run', 'dev'], {
   shell: process.platform === 'win32',
 });
 
+// Terminate child processes on exit
 function shutdown() {
-  console.log('\nShutting down backend and frontend servers...');
+  console.log('\nShutting down servers...');
   try {
     if (process.platform === 'win32') {
-      if (backend.pid) spawn('taskkill', ['/pid', backend.pid.toString(), '/f', '/t'], { shell: true });
-      if (frontend.pid) spawn('taskkill', ['/pid', frontend.pid.toString(), '/f', '/t'], { shell: true });
+      if (backend?.pid) spawn('taskkill', ['/pid', backend.pid.toString(), '/f', '/t'], { shell: true });
+      if (frontend?.pid) spawn('taskkill', ['/pid', frontend.pid.toString(), '/f', '/t'], { shell: true });
+      if (tunnelProcess?.pid) spawn('taskkill', ['/pid', tunnelProcess.pid.toString(), '/f', '/t'], { shell: true });
     } else {
-      backend.kill('SIGTERM');
-      frontend.kill('SIGTERM');
+      backend?.kill('SIGTERM');
+      frontend?.kill('SIGTERM');
+      tunnelProcess?.kill('SIGTERM');
     }
   } catch {
     // Process cleanup completed

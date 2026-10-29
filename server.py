@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 import httpx
@@ -229,7 +229,7 @@ async def trigger_dial(request: Request):
     payload = await parse_params(request)
     to_number = payload.get("to") or payload.get("phone_number")
     if not to_number:
-        return Response(content='{"ok": false, "error": "Missing phone number"}', status_code=400, media_type="application/json")
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Missing phone number"})
 
     answer_url = f"{PUBLIC_URL}/answer"
     hangup_url = f"{PUBLIC_URL}/hangup"
@@ -251,7 +251,7 @@ async def trigger_dial(request: Request):
         )
         return {"ok": True, "status": "call_initiated", "call_uuid": call_uuid, "vobiz_response": result}
     except Exception as exc:
-        return Response(content=f'{{"ok": false, "error": "{str(exc)}"}}', status_code=500, media_type="application/json")
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 # Retrieve dialer and campaign status for UI HUD
 @app.get("/api/campaign/status")

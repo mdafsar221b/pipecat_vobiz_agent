@@ -38,6 +38,18 @@ async def place_call(
             resp = await client.post(url, json=payload, headers=get_headers())
             resp.raise_for_status()
             return resp.json()
+        except httpx.HTTPStatusError as exc:
+            err_msg = str(exc)
+            try:
+                err_data = exc.response.json()
+                if isinstance(err_data, dict) and "error" in err_data:
+                    err_msg = f"{err_data['error']} (HTTP {exc.response.status_code})"
+                elif exc.response.text:
+                    err_msg = f"{exc.response.text.strip()} (HTTP {exc.response.status_code})"
+            except Exception:
+                pass
+            logger.error(f"Failed to place Vobiz call to {to_number}: {err_msg}")
+            raise RuntimeError(err_msg) from exc
         except httpx.HTTPError as exc:
             logger.error(f"Failed to place Vobiz call to {to_number}: {exc}")
             raise
