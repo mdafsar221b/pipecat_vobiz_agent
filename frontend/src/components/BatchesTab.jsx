@@ -164,7 +164,7 @@ export default function BatchesTab({
         case 'interested':
           return 'Interested';
         case 'declined':
-          return 'Declined';
+          return 'Not Interested';
         case 'wrong':
           return 'Wrong Number';
         case 'silent':
@@ -185,7 +185,7 @@ export default function BatchesTab({
           <div className="flex items-center gap-3">
             <button
               onClick={handleBackToBatches}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-2xs transition"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Back to Batches</span>
@@ -202,18 +202,18 @@ export default function BatchesTab({
 
           <div className="flex items-center gap-2">
             <span
-              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wider border ${
+              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider border ${
                 isCompleted
                   ? 'bg-slate-100 text-slate-600 border-slate-200'
                   : 'bg-emerald-50 text-emerald-700 border-emerald-200'
               }`}
             >
-              <span className={`w-1.5 h-1.5 rounded-full ${isCompleted ? 'bg-slate-400' : 'bg-emerald-500 animate-pulse'}`} />
+              <span className={`w-1.5 h-1.5 ${isCompleted ? 'bg-slate-400' : 'bg-emerald-500 animate-pulse'}`} />
               {(b.status || 'ACTIVE').toUpperCase()}
             </span>
             <button
               onClick={handleDeleteBatch}
-              className="inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-semibold bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 shadow-2xs transition"
+              className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 transition"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>Delete Batch</span>
@@ -245,9 +245,9 @@ export default function BatchesTab({
               role="button"
               tabIndex={0}
               title="Click to view all leads in batch"
-              className={`border rounded-xl p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
                 batchKpiFilter === 'all'
-                  ? 'bg-slate-900 text-white border-slate-900 shadow-sm scale-[1.02]'
+                  ? 'bg-slate-900 text-white border-slate-900'
                   : 'bg-white border-slate-200 hover:bg-slate-50'
               }`}
             >
@@ -267,9 +267,9 @@ export default function BatchesTab({
               role="button"
               tabIndex={0}
               title="Click to filter dialed calls"
-              className={`border rounded-xl p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
                 batchKpiFilter === 'dialed'
-                  ? 'bg-[#008792] text-white border-[#008792] shadow-sm scale-[1.02]'
+                  ? 'bg-[#008792] text-white border-[#008792]'
                   : 'bg-white border-slate-200 hover:bg-[#008792]/5'
               }`}
             >
@@ -289,9 +289,9 @@ export default function BatchesTab({
               role="button"
               tabIndex={0}
               title="Click to filter interested calls"
-              className={`border rounded-xl p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
                 batchKpiFilter === 'interested'
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm scale-[1.02]'
+                  ? 'bg-emerald-600 text-white border-emerald-600'
                   : 'bg-white border-slate-200 hover:bg-emerald-50'
               }`}
             >
@@ -305,15 +305,15 @@ export default function BatchesTab({
               }`}>Interested</span>
             </div>
 
-            {/* Declined Card */}
+            {/* Not Interested Card */}
             <div
               onClick={() => handleKpiCardClick('declined')}
               role="button"
               tabIndex={0}
-              title="Click to filter declined calls"
-              className={`border rounded-xl p-2.5 text-center cursor-pointer transition-all select-none ${
+              title="Click to filter not interested calls"
+              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
                 batchKpiFilter === 'declined'
-                  ? 'bg-rose-600 text-white border-rose-600 shadow-sm scale-[1.02]'
+                  ? 'bg-rose-600 text-white border-rose-600'
                   : 'bg-white border-slate-200 hover:bg-rose-50'
               }`}
             >
@@ -324,7 +324,7 @@ export default function BatchesTab({
               </span>
               <span className={`text-[10px] font-bold uppercase tracking-wider ${
                 batchKpiFilter === 'declined' ? 'text-rose-100' : 'text-slate-400'
-              }`}>Declined</span>
+              }`}>Not Interested</span>
             </div>
 
             {/* Wrong Card */}
@@ -333,9 +333,9 @@ export default function BatchesTab({
               role="button"
               tabIndex={0}
               title="Click to filter wrong number calls"
-              className={`border rounded-xl p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
                 batchKpiFilter === 'wrong'
-                  ? 'bg-purple-600 text-white border-purple-600 shadow-sm scale-[1.02]'
+                  ? 'bg-purple-600 text-white border-purple-600'
                   : 'bg-white border-slate-200 hover:bg-purple-50'
               }`}
             >
@@ -355,9 +355,9 @@ export default function BatchesTab({
               role="button"
               tabIndex={0}
               title="Click to filter silent / not talking calls"
-              className={`border rounded-xl p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
                 batchKpiFilter === 'silent'
-                  ? 'bg-amber-600 text-white border-amber-600 shadow-sm scale-[1.02]'
+                  ? 'bg-amber-600 text-white border-amber-600'
                   : 'bg-white border-slate-200 hover:bg-amber-50'
               }`}
             >
@@ -377,9 +377,9 @@ export default function BatchesTab({
               role="button"
               tabIndex={0}
               title="Click to filter unanswered calls"
-              className={`border rounded-xl p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
                 batchKpiFilter === 'no_answer'
-                  ? 'bg-slate-700 text-white border-slate-700 shadow-sm scale-[1.02]'
+                  ? 'bg-slate-700 text-white border-slate-700'
                   : 'bg-white border-slate-200 hover:bg-slate-50'
               }`}
             >
@@ -399,9 +399,9 @@ export default function BatchesTab({
               role="button"
               tabIndex={0}
               title="Click to filter dropped calls"
-              className={`border rounded-xl p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
                 batchKpiFilter === 'dropped'
-                  ? 'bg-red-700 text-white border-red-700 shadow-sm scale-[1.02]'
+                  ? 'bg-red-700 text-white border-red-700'
                   : 'bg-white border-slate-200 hover:bg-red-50'
               }`}
             >
@@ -418,7 +418,7 @@ export default function BatchesTab({
         </div>
 
         {/* Search & Active Filter Strip */}
-        <div className="flex flex-wrap items-center justify-between gap-2.5 p-2.5 bg-slate-50/70 rounded-xl border border-slate-200/80">
+        <div className="flex flex-wrap items-center justify-between gap-2.5 p-2.5 bg-slate-50/70 border border-slate-200">
           <div className="flex items-center gap-2 flex-1 min-w-[220px]">
             <div className="relative flex-1">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
@@ -427,7 +427,7 @@ export default function BatchesTab({
                 value={batchSearchQuery}
                 onChange={(e) => setBatchSearchQuery(e.target.value)}
                 placeholder="Search calls in this batch by phone, customer name, diagnostic root cause..."
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs pl-8 pr-8 py-1.5 rounded-lg outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792] shadow-2xs"
+                className="w-full bg-white border border-slate-200 text-slate-800 text-xs pl-8 pr-8 py-1.5 outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792]"
               />
               {batchSearchQuery && (
                 <button
@@ -442,7 +442,7 @@ export default function BatchesTab({
 
           <div className="flex items-center gap-2 text-xs">
             {batchKpiFilter !== 'all' && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#008792]/10 text-[#008792] font-semibold border border-[#008792]/20">
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#008792]/10 text-[#008792] font-semibold border border-[#008792]/20">
                 <span>Filter: {getFilterLabel(batchKpiFilter)}</span>
                 <button
                   onClick={() => setBatchKpiFilter('all')}
@@ -459,187 +459,266 @@ export default function BatchesTab({
           </div>
         </div>
 
-        {/* Calls in this batch */}
-        <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
-          {isLoadingDetail ? (
-            <div className="text-center py-12 text-slate-400">
-              <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
-              <span className="text-xs font-medium">Fetching call audio telemetry and transcripts...</span>
-            </div>
-          ) : filteredBatchCalls.length === 0 ? (
-            <div className="text-center py-12 bg-slate-50/70 rounded-xl border border-dashed border-slate-200 text-slate-500 text-xs">
-              <p className="font-semibold text-slate-700">No calls match the selected KPI filter</p>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Click 'Show All' above or click the Total card to view all {calls.length} calls in this batch.
-              </p>
-              {(batchKpiFilter !== 'all' || batchSearchQuery) && (
-                <button
-                  onClick={() => {
-                    setBatchKpiFilter('all');
-                    setBatchSearchQuery('');
-                  }}
-                  className="mt-3 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 text-[#008792] hover:bg-slate-50 shadow-2xs"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Reset Batch Filters</span>
-                </button>
-              )}
-            </div>
-          ) : (
-            filteredBatchCalls.map((entry) => {
-              const recUrl = entry.recording_url;
-              const durationSec = entry.duration || 0;
-              const dispConf = getDispositionConfig(entry.disposition);
-              const diagConf = getDiagnosticConfig(entry.diagnostic?.classification);
-              const custName = entry.customer_name || entry.contact_name || '';
-              const cbTime = entry.callback_time || '';
-              const diag = entry.diagnostic || {};
-              const am = diag.audio_metrics || entry.audio_metrics || {};
-
-              const isTranscriptOpen = openTranscriptId === entry.call_uuid;
-              const isTimelineOpen = openTimelineId === entry.call_uuid;
-              const turnsCount = (entry.turns || []).length;
-              const eventsCount = (entry.events || []).length;
-
-              return (
-                <div
-                  key={entry.call_uuid}
-                  className="bg-white border border-slate-200/90 rounded-xl p-4 shadow-sm hover:border-slate-300 transition"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-100">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-sm font-bold text-slate-900">
-                        {entry.phone_number || entry.call_uuid.slice(0, 12)}
-                      </span>
-                      {custName && (
-                        <span className="text-xs font-semibold text-[#008792] bg-[#008792]/10 px-2 py-0.5 rounded border border-[#008792]/20">
-                          {custName}
-                        </span>
-                      )}
-                      <span className="text-[11px] font-mono text-slate-400">
-                        #{entry.call_uuid.slice(0, 8)}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {diagConf && (
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${diagConf.bg} ${diagConf.text} ${diagConf.border}`}>
-                          {diagConf.label}
-                        </span>
-                      )}
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${dispConf.bg} ${dispConf.text} ${dispConf.border}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${dispConf.dot}`} />
-                        {dispConf.label}
-                      </span>
-                      <span className="inline-flex items-center gap-1 font-mono text-xs text-slate-600 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">
-                        <Clock className="w-3 h-3 text-slate-400" />
-                        <span>{formatDuration(durationSec)}</span>
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 mb-2 font-mono">
-                    {cbTime && (
-                      <span className="font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-sans">
-                        Callback: {cbTime}
-                      </span>
+        {/* Calls in this batch - High Density Slate Table */}
+        <div className="overflow-x-auto max-h-[calc(100vh-320px)] border border-slate-200 bg-white">
+          <table className="w-full border-collapse text-left text-xs">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px] sticky top-0 z-10 backdrop-blur-sm">
+                <th className="px-3.5 py-3 whitespace-nowrap">Recipient</th>
+                <th className="px-3.5 py-3 whitespace-nowrap">Disposition</th>
+                <th className="px-3.5 py-3 whitespace-nowrap">Stream Health</th>
+                <th className="px-3.5 py-3 whitespace-nowrap">Duration</th>
+                <th className="px-3.5 py-3 whitespace-nowrap">Time &amp; Callback</th>
+                <th className="px-3.5 py-3 whitespace-nowrap">Diagnostic Summary</th>
+                <th className="px-3.5 py-3 whitespace-nowrap">Audio Recording</th>
+                <th className="px-3.5 py-3 text-right whitespace-nowrap">Investigation</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200">
+              {isLoadingDetail ? (
+                <tr>
+                  <td colSpan={8} className="text-center py-12 text-slate-400">
+                    <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
+                    <span className="text-xs font-medium">Fetching call audio telemetry and transcripts...</span>
+                  </td>
+                </tr>
+              ) : filteredBatchCalls.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="text-center py-12 bg-slate-50/50">
+                    <p className="font-semibold text-slate-700">No calls match the selected KPI filter</p>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Click 'Show All' above or click the Total card to view all {calls.length} calls in this batch.
+                    </p>
+                    {(batchKpiFilter !== 'all' || batchSearchQuery) && (
+                      <button
+                        onClick={() => {
+                          setBatchKpiFilter('all');
+                          setBatchSearchQuery('');
+                        }}
+                        className="mt-3 inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-[#008792] hover:bg-slate-50"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Reset Batch Filters</span>
+                      </button>
                     )}
-                    <span>Time: {formatTime(entry.created_at)}</span>
-                    <span>Inbound: {formatBytes(am.inbound_bytes || 0)}</span>
-                    <span>Outbound: {formatBytes(am.outbound_bytes || 0)}</span>
-                  </div>
+                  </td>
+                </tr>
+              ) : (
+                filteredBatchCalls.map((entry) => {
+                  const recUrl = entry.recording_url;
+                  const durationSec = entry.duration || 0;
+                  const dispConf = getDispositionConfig(entry.disposition);
+                  const diagConf = getDiagnosticConfig(entry.diagnostic?.classification);
+                  const custName = entry.customer_name || entry.contact_name || '';
+                  const cbTime = entry.callback_time || '';
+                  const diag = entry.diagnostic || {};
+                  const am = diag.audio_metrics || entry.audio_metrics || {};
+                  const inBytes = am.inbound_bytes || 0;
+                  const outBytes = am.outbound_bytes || 0;
+                  const inChunks = am.inbound_chunks || 0;
 
-                  {diag.root_cause_summary && (
-                    <div className="flex items-start gap-2 bg-slate-50 border border-slate-200/70 rounded-lg p-2.5 text-xs text-slate-700 mb-2.5">
-                      <Info className="w-3.5 h-3.5 text-[#008792] flex-shrink-0 mt-0.5" />
-                      <div>
-                        <span className="font-semibold text-slate-900">Diagnostic Summary: </span>
-                        <span>{diag.root_cause_summary}</span>
-                      </div>
-                    </div>
-                  )}
+                  const isTranscriptOpen = openTranscriptId === entry.call_uuid;
+                  const isTimelineOpen = openTimelineId === entry.call_uuid;
+                  const turnsCount = (entry.turns || []).length;
+                  const eventsCount = (entry.events || []).length;
 
-                  {(recUrl || (durationSec > 5 && (am.inbound_bytes > 0 || am.outbound_bytes > 0))) && (
-                    <div className="bg-slate-50/70 border border-slate-200/80 rounded-lg p-2.5 mb-2.5 flex items-center gap-2">
-                      <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 flex-shrink-0">
-                        <Volume2 className="w-4 h-4 text-[#008792]" />
-                        <span>Recording:</span>
-                      </div>
-                      <audio
-                        controls
-                        preload="none"
-                        className="w-full h-8 outline-none rounded"
-                        src={`/api/recording/${encodeURIComponent(entry.call_uuid)}`}
-                      />
-                    </div>
-                  )}
+                  return (
+                    <React.Fragment key={entry.call_uuid}>
+                      <tr className={`hover:bg-slate-50/80 transition-colors ${isTranscriptOpen || isTimelineOpen ? 'bg-slate-50/50' : ''}`}>
+                        {/* Recipient */}
+                        <td className="px-3.5 py-3 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-bold text-slate-900">
+                              {entry.phone_number || entry.call_uuid.slice(0, 12)}
+                            </span>
+                            {custName && (
+                              <span className="text-[11px] font-semibold text-[#008792] bg-[#008792]/10 px-1.5 py-0.5 border border-[#008792]/20">
+                                {custName}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] font-mono text-slate-400 mt-0.5">
+                            #{entry.call_uuid.slice(0, 8)}
+                          </div>
+                        </td>
 
-                  <div className="flex items-center gap-3 pt-1">
-                    <button
-                      onClick={() => toggleTranscript(entry.call_uuid)}
-                      className="inline-flex items-center gap-1 text-xs font-semibold text-[#008792] hover:text-[#007680]"
-                    >
-                      <span>Dialog Transcript ({turnsCount} turns)</span>
-                      {isTranscriptOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                    </button>
+                        {/* Disposition */}
+                        <td className="px-3.5 py-3 whitespace-nowrap">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold border ${dispConf.bg} ${dispConf.text} ${dispConf.border}`}>
+                            <span className={`w-1.5 h-1.5 ${dispConf.dot}`} />
+                            {dispConf.label}
+                          </span>
+                        </td>
 
-                    <button
-                      onClick={() => toggleTimeline(entry.call_uuid)}
-                      className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-800"
-                    >
-                      <Activity className="w-3.5 h-3.5 text-slate-400" />
-                      <span>Carrier Timeline ({eventsCount} events)</span>
-                      {isTimelineOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
+                        {/* Stream Health */}
+                        <td className="px-3.5 py-3 whitespace-nowrap">
+                          {diagConf ? (
+                            <span className={`inline-flex items-center px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border ${diagConf.bg} ${diagConf.text} ${diagConf.border}`}>
+                              {diagConf.label}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 text-[11px]">--</span>
+                          )}
+                        </td>
 
-                  {isTranscriptOpen && (
-                    <div className="mt-3 pt-3 border-t border-slate-100 bg-slate-50/60 rounded-lg p-3 space-y-2">
-                      {turnsCount > 0 ? (
-                        entry.turns.map((t, idx) => (
-                          <div
-                            key={idx}
-                            className={`flex flex-col ${t.role === 'agent' ? 'items-start' : 'items-end'}`}
-                          >
-                            <div className="flex items-center gap-1 text-[10px] text-slate-400 mb-0.5 px-1 font-semibold uppercase">
-                              {t.role === 'agent' ? <Bot className="w-3 h-3 text-[#008792]" /> : <User className="w-3 h-3 text-emerald-600" />}
-                              <span>{t.role === 'agent' ? 'Ananya (Voice AI)' : 'Customer'}</span>
+                        {/* Duration */}
+                        <td className="px-3.5 py-3 whitespace-nowrap font-mono text-xs text-slate-700">
+                          <span className="inline-flex items-center gap-1 bg-slate-50 border border-slate-200 px-2 py-0.5">
+                            <Clock className="w-3 h-3 text-slate-400" />
+                            <span>{formatDuration(durationSec)}</span>
+                          </span>
+                        </td>
+
+                        {/* Time & Callback */}
+                        <td className="px-3.5 py-3 whitespace-nowrap">
+                          <div className="text-slate-700 font-mono text-[11px]">
+                            {formatTime(entry.created_at)}
+                          </div>
+                          {cbTime && (
+                            <div className="mt-1 inline-flex items-center gap-1 font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 border border-emerald-200 text-[10px]">
+                              <span>Callback: {cbTime}</span>
                             </div>
-                            <div
-                              className={`max-w-[85%] rounded-lg px-3 py-1.5 text-xs ${
-                                t.role === 'agent'
-                                  ? 'bg-[#008792]/10 text-teal-950 border border-[#008792]/20'
-                                  : 'bg-white text-slate-900 border border-slate-200 shadow-2xs'
+                          )}
+                        </td>
+
+                        {/* Diagnostic Summary */}
+                        <td className="px-3.5 py-3 max-w-[280px]">
+                          <div className="text-xs text-slate-800 line-clamp-2 leading-snug" title={diag.root_cause_summary || 'Normal conversational call'}>
+                            {diag.root_cause_summary || <span className="text-slate-400 italic">Normal conversational call</span>}
+                          </div>
+                          <div className="text-[10px] font-mono text-slate-400 mt-1 flex items-center gap-1.5">
+                            <span>In: {formatBytes(inBytes)} ({inChunks}c)</span>
+                            <span>&bull;</span>
+                            <span>Out: {formatBytes(outBytes)}</span>
+                          </div>
+                        </td>
+
+                        {/* Audio Recording */}
+                        <td className="px-3.5 py-3 whitespace-nowrap min-w-[200px]">
+                          {(recUrl || (durationSec > 5 && (inBytes > 0 || outBytes > 0))) ? (
+                            <audio
+                              controls
+                              preload="none"
+                              className="w-48 h-7 outline-none"
+                              src={`/api/recording/${encodeURIComponent(entry.call_uuid)}`}
+                            />
+                          ) : (
+                            <span className="text-[11px] text-slate-400 italic">No recording</span>
+                          )}
+                        </td>
+
+                        {/* Investigation Actions */}
+                        <td className="px-3.5 py-3 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => toggleTranscript(entry.call_uuid)}
+                              className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold border transition ${
+                                isTranscriptOpen
+                                  ? 'bg-[#008792] text-white border-[#008792]'
+                                  : 'bg-white text-[#008792] border-slate-200 hover:border-[#008792]'
                               }`}
+                              title="Toggle dialog turns transcript"
                             >
-                              {t.text}
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="text-xs text-slate-400 text-center py-1">No dialog turns recorded.</p>
-                      )}
-                    </div>
-                  )}
+                              <span>Transcript ({turnsCount})</span>
+                              {isTranscriptOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                            </button>
 
-                  {isTimelineOpen && (
-                    <div className="mt-3 pt-3 border-t border-slate-100 bg-slate-50/80 rounded-lg p-3 space-y-1.5">
-                      {eventsCount > 0 ? (
-                        entry.events.map((ev, idx) => (
-                          <div key={idx} className="flex justify-between text-xs font-mono text-slate-600">
-                            <span>{ev.event}</span>
-                            <span className="text-slate-400">{ev.timestamp ? ev.timestamp.slice(11, 23) : '--'}</span>
+                            <button
+                              onClick={() => toggleTimeline(entry.call_uuid)}
+                              className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold border transition ${
+                                isTimelineOpen
+                                  ? 'bg-slate-800 text-white border-slate-800'
+                                  : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                              }`}
+                              title="Toggle carrier lifecycle events"
+                            >
+                              <Activity className="w-3 h-3" />
+                              {isTimelineOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                            </button>
                           </div>
-                        ))
-                      ) : (
-                        <p className="text-xs text-slate-400 text-center py-1">No events recorded.</p>
+                        </td>
+                      </tr>
+
+                      {/* Expandable Accordion Row */}
+                      {(isTranscriptOpen || isTimelineOpen) && (
+                        <tr className="bg-slate-50/70 border-b border-slate-200">
+                          <td colSpan={8} className="p-3.5">
+                            {isTranscriptOpen && (
+                              <div className="bg-white border border-slate-200 p-3 space-y-2 mb-2.5">
+                                <div className="flex items-center justify-between pb-2 border-b border-slate-100 text-xs">
+                                  <span className="font-bold text-slate-800 uppercase tracking-wider">
+                                    Dialog Transcript ({turnsCount} turns)
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 font-mono">
+                                    UUID: {entry.call_uuid}
+                                  </span>
+                                </div>
+
+                                {turnsCount > 0 ? (
+                                  <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                                    {entry.turns.map((t, idx) => {
+                                      const isAgent = t.role === 'agent';
+                                      return (
+                                        <div
+                                          key={idx}
+                                          className={`flex flex-col ${isAgent ? 'items-start' : 'items-end'}`}
+                                        >
+                                          <div className="flex items-center gap-1 text-[10px] text-slate-400 mb-0.5 px-1 font-semibold uppercase">
+                                            {isAgent ? <Bot className="w-3 h-3 text-[#008792]" /> : <User className="w-3 h-3 text-emerald-600" />}
+                                            <span>{isAgent ? 'Ananya (Voice AI)' : 'Customer'}</span>
+                                          </div>
+                                          <div
+                                            className={`max-w-[85%] px-3 py-1.5 text-xs leading-relaxed ${
+                                              isAgent
+                                                ? 'bg-[#008792]/10 text-teal-950 border border-[#008792]/20'
+                                                : 'bg-white text-slate-900 border border-slate-200'
+                                            }`}
+                                          >
+                                            {t.text}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <p className="text-xs text-slate-400 text-center py-2">
+                                    No dialog turns recorded.
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
+                            {isTimelineOpen && (
+                              <div className="bg-white border border-slate-200 p-3">
+                                <div className="flex items-center justify-between pb-2 border-b border-slate-100 text-xs mb-3">
+                                  <span className="font-bold text-slate-800 uppercase tracking-wider">
+                                    Carrier Lifecycle Timeline ({eventsCount} events)
+                                  </span>
+                                </div>
+
+                                {eventsCount > 0 ? (
+                                  <div className="relative pl-4 space-y-3 before:absolute before:left-1.5 before:top-1.5 before:bottom-1.5 before:w-0.5 before:bg-slate-200 max-h-60 overflow-y-auto">
+                                    {entry.events.map((ev, idx) => (
+                                      <div key={idx} className="flex justify-between text-xs font-mono text-slate-600">
+                                        <span>{ev.event}</span>
+                                        <span className="text-slate-400">{ev.timestamp ? ev.timestamp.slice(11, 23) : '--'}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-xs text-slate-400 text-center py-2">No events recorded.</p>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
                       )}
-                    </div>
-                  )}
-                </div>
-              );
-            })
-          )}
+                    </React.Fragment>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     );
@@ -658,7 +737,7 @@ export default function BatchesTab({
         <button
           onClick={onRefreshBatches}
           disabled={isLoadingBatches}
-          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-2xs transition self-start sm:self-auto disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition self-start sm:self-auto disabled:opacity-40"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isLoadingBatches ? 'animate-spin text-[#008792]' : ''}`} />
           <span>{isLoadingBatches ? 'Refreshing...' : 'Refresh Batches'}</span>
@@ -667,7 +746,7 @@ export default function BatchesTab({
 
       <div className="space-y-3 max-h-[640px] overflow-y-auto pr-1">
         {batches.length === 0 ? (
-          <div className="text-center py-14 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+          <div className="text-center py-14 bg-slate-50/50 border border-dashed border-slate-200">
             <Layers className="w-8 h-8 text-slate-300 mx-auto mb-2" />
             <p className="text-xs font-semibold text-slate-700">No campaign batches recorded yet</p>
             <p className="text-[11px] text-slate-400 mt-0.5">
@@ -695,20 +774,20 @@ export default function BatchesTab({
               <div
                 key={b.batch_id}
                 onClick={() => openBatchDetail(b.batch_id)}
-                className="bg-white border border-slate-200/90 hover:border-[#008792] rounded-xl p-4 shadow-sm hover:shadow transition cursor-pointer group"
+                className="bg-white border border-slate-200 hover:border-[#008792] p-4 transition cursor-pointer group"
               >
                 <div className="flex items-center justify-between mb-1.5">
                   <h4 className="font-bold text-sm text-slate-900 group-hover:text-[#008792] transition-colors">
                     {b.name || b.batch_id}
                   </h4>
                   <span
-                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider border ${
+                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider border ${
                       isCompleted
                         ? 'bg-slate-100 text-slate-600 border-slate-200'
                         : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                     }`}
                   >
-                    <span className={`w-1.5 h-1.5 rounded-full ${isCompleted ? 'bg-slate-400' : 'bg-emerald-500 animate-pulse'}`} />
+                    <span className={`w-1.5 h-1.5 ${isCompleted ? 'bg-slate-400' : 'bg-emerald-500 animate-pulse'}`} />
                     {(b.status || 'ACTIVE').toUpperCase()}
                   </span>
                 </div>
@@ -722,25 +801,25 @@ export default function BatchesTab({
                 </div>
 
                 <div className="flex flex-wrap gap-1.5 mb-3">
-                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold border border-slate-200">
+                  <span className="text-xs font-mono px-2 py-0.5 bg-slate-100 text-slate-700 font-semibold border border-slate-200">
                     Total: {b.total_leads || 0}
                   </span>
-                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-[#008792]/10 text-[#008792] font-semibold border border-[#008792]/20">
+                  <span className="text-xs font-mono px-2 py-0.5 bg-[#008792]/10 text-[#008792] font-semibold border border-[#008792]/20">
                     Dialed: {m.dialed || 0}
                   </span>
-                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
+                  <span className="text-xs font-mono px-2 py-0.5 bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
                     Interested: {m.interested || 0}
                   </span>
-                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-rose-50 text-rose-700 font-semibold border border-rose-200">
-                    Declined: {m.not_interested || 0}
+                  <span className="text-xs font-mono px-2 py-0.5 bg-rose-50 text-rose-700 font-semibold border border-rose-200">
+                    Not Interested: {m.not_interested || 0}
                   </span>
-                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-purple-50 text-purple-700 font-semibold border border-purple-200">
+                  <span className="text-xs font-mono px-2 py-0.5 bg-purple-50 text-purple-700 font-semibold border border-purple-200">
                     Wrong: {m.wrong_number || 0}
                   </span>
-                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-amber-50 text-amber-700 font-semibold border border-amber-200">
+                  <span className="text-xs font-mono px-2 py-0.5 bg-amber-50 text-amber-700 font-semibold border border-amber-200">
                     Silent: {m.not_talking || 0}
                   </span>
-                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold border border-slate-200">
+                  <span className="text-xs font-mono px-2 py-0.5 bg-slate-100 text-slate-600 font-semibold border border-slate-200">
                     No Answer: {m.no_answer || 0}
                   </span>
                 </div>

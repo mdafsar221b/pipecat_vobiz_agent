@@ -19,6 +19,7 @@ const PREDEFINED_TEST_CONTACTS = [
   { name: 'Krupali', phone: '+919769756433' },
   { name: 'Botify', phone: '+918065521614' },
   { name: 'Prakash', phone: '+917976818025' },
+  {name:'Alok Sir', phone:'+919739998801'},
 ];
 
 // Campaign orchestration controls, KPI cards, and dialer actions
@@ -132,16 +133,16 @@ export default function CampaignController({
   const statusLabel = isRunning ? (isPaused ? 'PAUSED' : 'ACTIVE') : 'IDLE';
 
   return (
-    <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-[0_1px_3px_rgba(0,0,0,0.04)] space-y-5">
-      {/* Header with status and progress */}
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2.5">
-            <h2 className="text-sm font-bold text-slate-900 tracking-tight">
-              Campaign Orchestration &amp; Controls
-            </h2>
+    <div className="flex flex-col h-full min-h-0 divide-y divide-slate-200 bg-white">
+      {/* 1. Header with Status & Progress */}
+      <div className="p-3 bg-white flex-shrink-0">
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-900 tracking-tight">
+              Dialer Command Desk
+            </span>
             <span
-              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase border ${
+              className={`inline-flex items-center gap-1 px-1.5 py-0.2 text-[9px] font-bold tracking-wider uppercase border ${
                 isRunning && !isPaused
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : isPaused
@@ -150,7 +151,7 @@ export default function CampaignController({
               }`}
             >
               <span
-                className={`w-1.5 h-1.5 rounded-full ${
+                className={`w-1.5 h-1.5 ${
                   isRunning && !isPaused
                     ? 'bg-emerald-500 animate-pulse'
                     : isPaused
@@ -162,284 +163,265 @@ export default function CampaignController({
             </span>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             {retries > 0 && (
               <button
                 onClick={onRetryFailed}
-                className="text-xs font-semibold text-[#008792] hover:text-[#007680] hover:underline"
+                className="text-xs font-semibold text-[#008792] hover:underline cursor-pointer"
               >
-                Retry Failed ({retries})
+                Retry ({retries})
               </button>
             )}
-            <span className="font-mono text-xs font-semibold text-slate-500">
-              {completed} / {total} Leads ({progressPercent}%)
+            <span className="font-mono text-[11px] font-semibold text-slate-500">
+              {completed}/{total} Leads ({progressPercent}%)
             </span>
           </div>
         </div>
 
-        {/* Nugget Teal Progress Bar */}
-        <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+        {/* Flat Progress Bar */}
+        <div className="w-full bg-slate-100 h-1 overflow-hidden">
           <div
-            className="bg-gradient-to-r from-[#008792] to-[#00a2af] h-2 rounded-full transition-all duration-500"
+            className="bg-[#008792] h-1 transition-all duration-300"
             style={{ width: `${progressPercent}%` }}
           />
         </div>
       </div>
 
-      {/* KPI Stats Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 text-center">
-          <span className="block text-lg font-bold font-mono text-slate-900 leading-tight">
-            {total}
-          </span>
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Total In Queue
-          </span>
-        </div>
-        <div className="bg-[#008792]/5 border border-[#008792]/20 rounded-xl p-3 text-center">
-          <span className="block text-lg font-bold font-mono text-[#008792] leading-tight">
-            {pending}
-          </span>
-          <span className="text-[10px] font-bold uppercase tracking-wider text-[#008792]/80">
-            Pending Leads
-          </span>
-        </div>
-        <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3 text-center">
-          <span className="block text-lg font-bold font-mono text-amber-700 leading-tight">
-            {activeCount}
-          </span>
-          <span className="text-[10px] font-bold uppercase tracking-wider text-amber-600/80">
-            Live Dialing
-          </span>
-        </div>
-        <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-xl p-3 text-center">
-          <span className="block text-lg font-bold font-mono text-emerald-700 leading-tight">
-            {completed}
-          </span>
-          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600/80">
-            Completed
-          </span>
-        </div>
-        <div className="bg-indigo-50/70 border border-indigo-200/80 rounded-xl p-3 text-center col-span-2 sm:col-span-1">
-          <span className="block text-lg font-bold font-mono text-indigo-700 leading-tight">
-            {conversionRate}%
-          </span>
-          <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600/80">
-            Interest Rate
-          </span>
+      {/* 2. Primary OBD Action Buttons */}
+      <div className="p-3 bg-white flex-shrink-0">
+        <div className="grid grid-cols-4 gap-1.5">
+          <button
+            onClick={onStartCampaign}
+            disabled={isRunning}
+            className="flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          >
+            <Play className="w-3 h-3 fill-current" />
+            <span>Start</span>
+          </button>
+
+          <button
+            onClick={isPaused ? onResumeCampaign : onPauseCampaign}
+            disabled={!isRunning}
+            className="flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          >
+            {isPaused ? <Play className="w-3 h-3 fill-current" /> : <Pause className="w-3 h-3 fill-current" />}
+            <span>{isPaused ? 'Resume' : 'Pause'}</span>
+          </button>
+
+          <button
+            onClick={onStopCampaign}
+            disabled={!isRunning}
+            className="flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          >
+            <Square className="w-3 h-3 fill-current" />
+            <span>Stop</span>
+          </button>
+
+          <button
+            onClick={onResetQueue}
+            title="Clear queue and reset counters"
+            className="flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition cursor-pointer"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Reset</span>
+          </button>
         </div>
       </div>
 
-      {/* Outcomes breakdown row */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="flex items-center gap-2.5 p-2.5 bg-emerald-50/60 rounded-xl border border-emerald-100">
-          <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center flex-shrink-0 text-emerald-700">
-            <ThumbsUp className="w-4 h-4" />
-          </div>
-          <div className="min-w-0">
-            <span className="font-bold text-emerald-800 block font-mono text-sm leading-tight">
-              {stats.interested || 0}
+      {/* 3. Compact Metrics & Outcomes Strip */}
+      <div className="p-3 bg-slate-50/60 space-y-2 flex-shrink-0">
+        <div className="grid grid-cols-4 gap-1.5">
+          <div className="bg-white border border-slate-200 p-1.5 text-center">
+            <span className="block text-sm font-bold font-mono text-slate-900 leading-tight">
+              {total}
             </span>
-            <span className="text-[10px] uppercase text-emerald-600 font-semibold block tracking-wider">
-              Interested
+            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+              Queue
             </span>
           </div>
-        </div>
-
-        <div className="flex items-center gap-2.5 p-2.5 bg-rose-50/60 rounded-xl border border-rose-100">
-          <div className="w-8 h-8 rounded-lg bg-rose-100 flex items-center justify-center flex-shrink-0 text-rose-700">
-            <ThumbsDown className="w-4 h-4" />
-          </div>
-          <div className="min-w-0">
-            <span className="font-bold text-rose-800 block font-mono text-sm leading-tight">
-              {stats.not_interested || 0}
+          <div className="bg-white border border-[#008792]/30 p-1.5 text-center">
+            <span className="block text-sm font-bold font-mono text-[#008792] leading-tight">
+              {pending}
             </span>
-            <span className="text-[10px] uppercase text-rose-600 font-semibold block tracking-wider">
-              Declined
+            <span className="text-[9px] font-bold uppercase tracking-wider text-[#008792]">
+              Pending
             </span>
           </div>
-        </div>
-
-        <div className="flex items-center gap-2.5 p-2.5 bg-slate-50 rounded-xl border border-slate-200">
-          <div className="w-8 h-8 rounded-lg bg-slate-200/80 flex items-center justify-center flex-shrink-0 text-slate-600">
-            <PhoneOff className="w-4 h-4" />
-          </div>
-          <div className="min-w-0">
-            <span className="font-bold text-slate-800 block font-mono text-sm leading-tight">
-              {stats.no_answer || 0}
+          <div className="bg-white border border-amber-200 p-1.5 text-center">
+            <span className="block text-sm font-bold font-mono text-amber-700 leading-tight">
+              {activeCount}
             </span>
-            <span className="text-[10px] uppercase text-slate-500 font-semibold block tracking-wider">
-              No Answer
+            <span className="text-[9px] font-bold uppercase tracking-wider text-amber-600">
+              Dialing
+            </span>
+          </div>
+          <div className="bg-white border border-indigo-200 p-1.5 text-center">
+            <span className="block text-sm font-bold font-mono text-indigo-700 leading-tight">
+              {conversionRate}%
+            </span>
+            <span className="text-[9px] font-bold uppercase tracking-wider text-indigo-600">
+              Interest
             </span>
           </div>
         </div>
-      </div>
 
-      {/* OBD Action Control Buttons */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
-        <button
-          onClick={onStartCampaign}
-          disabled={isRunning}
-          className="flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-xl text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Play className="w-3.5 h-3.5 fill-current" />
-          <span>Start Campaign OBD</span>
-        </button>
-
-        <button
-          onClick={isPaused ? onResumeCampaign : onPauseCampaign}
-          disabled={!isRunning}
-          className="flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-xl text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {isPaused ? <Play className="w-3.5 h-3.5 fill-current" /> : <Pause className="w-3.5 h-3.5 fill-current" />}
-          <span>{isPaused ? 'Resume Dialing' : 'Pause Dialer'}</span>
-        </button>
-
-        <button
-          onClick={onStopCampaign}
-          disabled={!isRunning}
-          className="flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Square className="w-3.5 h-3.5 fill-current" />
-          <span>Stop Campaign</span>
-        </button>
-
-        <button
-          onClick={onResetQueue}
-          title="Clear queue and reset counters"
-          className="flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-xl text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 shadow-2xs transition"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          <span>Reset Queue</span>
-        </button>
-      </div>
-
-      {/* Lower Dual Panel: Single Test Dial & Test Contacts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
-        {/* Single Direct Dial */}
-        <div className="bg-slate-50/70 border border-slate-200/80 rounded-xl p-4 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                <Phone className="w-3.5 h-3.5 text-[#008792]" />
-                <span>Single Test Dial</span>
-              </label>
-              {manualDialStatus && (
-                <span
-                  className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
-                    manualDialStatus === 'FAILED'
-                      ? 'bg-rose-100 text-rose-700'
-                      : manualDialStatus === 'IN CALL'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-amber-100 text-amber-700'
-                  }`}
-                >
-                  {manualDialStatus}
-                </span>
-              )}
-            </div>
-            <p className="text-[11px] text-slate-500 mb-3">
-              Directly dispatch a test call to any phone number to test voice pipeline latency and dialog flow.
-            </p>
-
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={manualPhone}
-                onChange={(e) => setManualPhone(e.target.value)}
-                placeholder="+91XXXXXXXXXX"
-                className="w-full bg-white border border-slate-200 text-slate-900 text-xs py-2 px-3 rounded-lg outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792] font-mono shadow-2xs"
-              />
-              <button
-                onClick={() => onTriggerManualDial(manualPhone)}
-                disabled={isDialingManual || activeCalls.length > 0}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
-              >
-                <PhoneCall className="w-3.5 h-3.5" />
-                <span>{isDialingManual ? 'Dialing...' : activeCalls.length > 0 ? 'In Call' : 'Dial Now'}</span>
-              </button>
+        <div className="grid grid-cols-3 gap-1.5 text-xs">
+          <div className="flex items-center gap-1.5 p-1 px-2 bg-white border border-emerald-200">
+            <ThumbsUp className="w-3 h-3 text-emerald-600 flex-shrink-0" />
+            <div className="min-w-0">
+              <span className="font-bold text-emerald-800 block font-mono text-xs leading-none">
+                {stats.interested || 0}
+              </span>
+              <span className="text-[9px] uppercase text-emerald-600 font-semibold block mt-0.5">
+                Interested
+              </span>
             </div>
           </div>
 
-          {manualDialFeedback && (
-            <p className="text-[11px] text-slate-600 mt-2.5 p-2 bg-white rounded-lg border border-slate-200 leading-snug">
-              {manualDialFeedback}
-            </p>
+          <div className="flex items-center gap-1.5 p-1 px-2 bg-white border border-rose-200">
+            <ThumbsDown className="w-3 h-3 text-rose-600 flex-shrink-0" />
+            <div className="min-w-0">
+              <span className="font-bold text-rose-800 block font-mono text-xs leading-none">
+                {stats.not_interested || 0}
+              </span>
+              <span className="text-[9px] uppercase text-rose-600 font-semibold block mt-0.5">
+                Not Interested
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 p-1 px-2 bg-white border border-slate-200">
+            <PhoneOff className="w-3 h-3 text-slate-500 flex-shrink-0" />
+            <div className="min-w-0">
+              <span className="font-bold text-slate-800 block font-mono text-xs leading-none">
+                {stats.no_answer || 0}
+              </span>
+              <span className="text-[9px] uppercase text-slate-500 font-semibold block mt-0.5">
+                No Answer
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Single Direct Dial */}
+      <div className="p-3 bg-white flex-shrink-0">
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-[11px] font-bold text-slate-800 flex items-center gap-1">
+            <Phone className="w-3 h-3 text-[#008792]" />
+            <span>Single Direct Dial</span>
+          </label>
+          {manualDialStatus && (
+            <span
+              className={`text-[9px] font-mono font-bold px-1.5 py-0.2 border ${
+                manualDialStatus === 'FAILED'
+                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                  : manualDialStatus === 'IN CALL'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-amber-50 text-amber-700 border-amber-200'
+              }`}
+            >
+              {manualDialStatus}
+            </span>
           )}
         </div>
 
-        {/* Predefined Test Contacts Batch */}
-        <div className="bg-slate-50/70 border border-slate-200/80 rounded-xl p-4 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
-                <Users className="w-3.5 h-3.5 text-[#008792]" />
-                <span>Test Contacts ({selectedContacts.length}/{PREDEFINED_TEST_CONTACTS.length})</span>
-              </div>
-              <button
-                type="button"
-                onClick={toggleAllContacts}
-                className="text-[11px] text-[#008792] hover:text-[#007680] font-semibold"
-              >
-                {selectedContacts.length === PREDEFINED_TEST_CONTACTS.length ? 'Deselect All' : 'Select All'}
-              </button>
-            </div>
+        <div className="flex gap-1.5">
+          <input
+            type="text"
+            value={manualPhone}
+            onChange={(e) => setManualPhone(e.target.value)}
+            placeholder="+91XXXXXXXXXX"
+            className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-xs py-1.5 px-2.5 outline-none focus:border-[#008792] font-mono"
+          />
+          <button
+            onClick={() => onTriggerManualDial(manualPhone)}
+            disabled={isDialingManual || activeCalls.length > 0}
+            className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white transition disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap cursor-pointer"
+          >
+            <PhoneCall className="w-3 h-3" />
+            <span>{isDialingManual ? 'Calling...' : activeCalls.length > 0 ? 'Busy' : 'Dial'}</span>
+          </button>
+        </div>
 
-            <div className="space-y-1.5 max-h-[130px] overflow-y-auto pr-1">
-              {PREDEFINED_TEST_CONTACTS.map((c, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center justify-between p-1.5 px-2 bg-white hover:bg-slate-100/70 border border-slate-200/70 rounded-lg text-xs transition"
+        {manualDialFeedback && (
+          <p className="text-[10px] text-slate-600 mt-1 p-1 bg-slate-50 border border-slate-200 leading-tight truncate">
+            {manualDialFeedback}
+          </p>
+        )}
+      </div>
+
+      {/* 5. Predefined Test Contacts Batch */}
+      <div className="p-3 bg-white flex-1 min-h-0 flex flex-col justify-between">
+        <div className="flex flex-col flex-1 min-h-0">
+          <div className="flex items-center justify-between mb-1.5 flex-shrink-0">
+            <div className="flex items-center gap-1 text-[11px] font-bold text-slate-800">
+              <Users className="w-3 h-3 text-[#008792]" />
+              <span>Test Contacts ({selectedContacts.length}/{PREDEFINED_TEST_CONTACTS.length})</span>
+            </div>
+            <button
+              type="button"
+              onClick={toggleAllContacts}
+              className="text-[10px] text-[#008792] hover:underline font-semibold cursor-pointer"
+            >
+              {selectedContacts.length === PREDEFINED_TEST_CONTACTS.length ? 'Deselect All' : 'Select All'}
+            </button>
+          </div>
+
+          <div className="space-y-1 overflow-y-auto pr-1 flex-1 min-h-[60px] border border-slate-200 divide-y divide-slate-100">
+            {PREDEFINED_TEST_CONTACTS.map((c, idx) => (
+              <div
+                key={idx}
+                className="flex items-center justify-between p-1 px-2 bg-white hover:bg-slate-50 text-xs transition"
+              >
+                <label className="flex items-center gap-2 cursor-pointer flex-1 truncate select-none">
+                  <input
+                    type="checkbox"
+                    checked={selectedContacts.includes(idx)}
+                    onChange={() => toggleContact(idx)}
+                    className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
+                  />
+                  <span className="font-semibold text-slate-800 text-[11px]">{c.name}</span>
+                  <span className="font-mono text-slate-400 text-[10px]">{c.phone}</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setManualPhone(c.phone);
+                  }}
+                  className="text-[9px] text-slate-600 hover:text-[#008792] bg-slate-50 hover:bg-white border border-slate-200 px-1.5 py-0.2 font-medium ml-2 cursor-pointer"
                 >
-                  <label className="flex items-center gap-2 cursor-pointer flex-1 truncate select-none">
-                    <input
-                      type="checkbox"
-                      checked={selectedContacts.includes(idx)}
-                      onChange={() => toggleContact(idx)}
-                      className="rounded text-[#008792] focus:ring-0 cursor-pointer"
-                    />
-                    <span className="font-semibold text-slate-800">{c.name}</span>
-                    <span className="font-mono text-slate-400 text-[11px]">{c.phone}</span>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setManualPhone(c.phone);
-                    }}
-                    className="text-[10px] text-slate-600 hover:text-[#008792] bg-slate-50 hover:bg-white border border-slate-200 rounded px-2 py-0.5 font-medium ml-2 shadow-2xs"
-                  >
-                    Use
-                  </button>
-                </div>
-              ))}
-            </div>
+                  Use
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="pt-2 flex-shrink-0">
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => handleQueueTestBatch(true)}
+              disabled={selectedContacts.length === 0 || isQueueingBatch}
+              className="flex-1 py-1.5 px-2 text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white transition disabled:opacity-40 cursor-pointer"
+            >
+              Start Test Batch ({selectedContacts.length})
+            </button>
+            <button
+              onClick={() => handleQueueTestBatch(false)}
+              disabled={selectedContacts.length === 0 || isQueueingBatch}
+              className="py-1.5 px-2.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition disabled:opacity-40 cursor-pointer"
+            >
+              Queue Only
+            </button>
           </div>
 
-          <div className="mt-3">
-            <div className="flex gap-2">
-              <button
-                onClick={() => handleQueueTestBatch(true)}
-                disabled={selectedContacts.length === 0 || isQueueingBatch}
-                className="flex-1 py-2 px-3 rounded-lg text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white shadow-sm transition disabled:opacity-40"
-              >
-                Start Test Batch ({selectedContacts.length})
-              </button>
-              <button
-                onClick={() => handleQueueTestBatch(false)}
-                disabled={selectedContacts.length === 0 || isQueueingBatch}
-                className="py-2 px-3 rounded-lg text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 shadow-2xs transition disabled:opacity-40"
-              >
-                Queue Only
-              </button>
-            </div>
-
-            {testBatchFeedback && (
-              <p className="text-[11px] text-slate-600 mt-2 p-1.5 bg-white rounded border border-slate-200">
-                {testBatchFeedback}
-              </p>
-            )}
-          </div>
+          {testBatchFeedback && (
+            <p className="text-[10px] text-slate-600 mt-1 p-1 bg-slate-50 border border-slate-200 truncate">
+              {testBatchFeedback}
+            </p>
+          )}
         </div>
       </div>
     </div>

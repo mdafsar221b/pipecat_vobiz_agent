@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { Radio, Clock, Bot, User, CheckCircle2 } from 'lucide-react';
+import { Radio, Clock, Bot, User, PhoneCall } from 'lucide-react';
 import { getDispositionConfig } from '../utils/formatters';
 
 // Nugget Voice AI Real-Time Telephony & Audio Stream Monitor
@@ -21,71 +21,71 @@ export default function LiveCallHud({ activeCall, lastCompletedCall }) {
     const timerStr = `${mins}:${secs}`;
 
     return (
-      <div className="bg-white rounded-2xl border border-[#e5e5e5] p-5 shadow-sm space-y-4">
+      <div className="flex flex-col h-full min-h-0 bg-white">
         {/* Terminal Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-neutral-100">
-          <div className="flex items-center gap-2.5">
-            <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold tracking-wide ${
+        <div className="px-4 py-2.5 border-b border-slate-200 flex items-center justify-between flex-shrink-0 bg-white">
+          <div className="flex items-center gap-2">
+            <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase border ${
               isDialing
-                ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                : 'bg-[#f4f9f9] text-[#008792] border border-[#c3e1e5]'
+                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                : 'bg-[#008792]/10 text-[#008792] border-[#008792]/20'
             }`}>
-              <span className={`w-2 h-2 rounded-full ${isDialing ? 'bg-amber-500 animate-ping' : 'bg-[#008792] animate-pulse'}`} />
+              <span className={`w-1.5 h-1.5 ${isDialing ? 'bg-amber-500 animate-ping' : 'bg-[#008792] animate-pulse'}`} />
               <span>{isDialing ? 'DIALING CARRIER' : 'VOICE STREAM ACTIVE'}</span>
             </span>
 
             {/* Voice Activity Waves */}
             {!isDialing && (
-              <div className="flex items-center gap-1 h-5 px-2 bg-[#f4f9f9] rounded-full border border-[#c3e1e5]">
-                <span className="w-1 bg-[#008792] rounded-full wave-bar-1" />
-                <span className="w-1 bg-[#008792] rounded-full wave-bar-2" />
-                <span className="w-1 bg-[#008792] rounded-full wave-bar-3" />
-                <span className="w-1 bg-[#008792] rounded-full wave-bar-4" />
-                <span className="w-1 bg-[#008792] rounded-full wave-bar-5" />
+              <div className="flex items-center gap-1 h-5 px-2 bg-[#008792]/5 border border-[#008792]/20">
+                <span className="w-1 bg-[#008792] wave-bar-1" />
+                <span className="w-1 bg-[#008792] wave-bar-2" />
+                <span className="w-1 bg-[#008792] wave-bar-3" />
+                <span className="w-1 bg-[#008792] wave-bar-4" />
+                <span className="w-1 bg-[#008792] wave-bar-5" />
               </div>
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 font-mono text-xs font-bold px-3 py-1 rounded-lg bg-neutral-900 text-white shadow-xs">
-            <Clock className="w-3.5 h-3.5 text-[#008792]" />
+          <div className="flex items-center gap-1.5 font-mono text-xs font-bold px-2 py-0.5 bg-neutral-900 text-white">
+            <Clock className="w-3 h-3 text-[#008792]" />
             <span>{timerStr}</span>
           </div>
         </div>
 
         {/* Recipient Details */}
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="px-4 py-2 border-b border-slate-200 flex items-center justify-between flex-shrink-0 bg-slate-50/60">
           <div>
-            <div className="flex items-center gap-2.5">
-              <span className="text-xl font-bold font-mono text-neutral-900 tracking-tight">
+            <div className="flex items-center gap-2">
+              <span className="text-base font-bold font-mono text-slate-900">
                 {activeCall.phone_number}
               </span>
               {activeCall.customer_name && (
-                <span className="text-xs font-semibold text-[#008792] bg-[#f4f9f9] border border-[#c3e1e5] px-2.5 py-0.5 rounded-full">
+                <span className="text-xs font-semibold text-[#008792] bg-[#008792]/10 border border-[#008792]/20 px-2 py-0.2">
                   {activeCall.customer_name}
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-neutral-400 font-mono mt-0.5">
-              Session UUID: {activeCall.call_uuid ? activeCall.call_uuid.slice(0, 16) : ''}...
+            <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+              UUID: {activeCall.call_uuid ? activeCall.call_uuid.slice(0, 18) : ''}...
             </p>
           </div>
 
           <div className="text-right">
-            <span className="text-xs font-semibold text-neutral-500 block">AI Agent: Ananya</span>
-            <span className="text-[11px] text-neutral-400 block font-mono">16kHz In / 24kHz Out</span>
+            <span className="text-xs font-semibold text-slate-700 block">Agent: Ananya</span>
+            <span className="text-[10px] text-slate-400 block font-mono">16kHz In &bull; 24kHz Out</span>
           </div>
         </div>
 
-        {/* Live Conversation Stream Box */}
+        {/* Live Conversation Stream Slate */}
         <div
           ref={transcriptRef}
-          className="max-h-[260px] min-h-[160px] overflow-y-auto bg-neutral-50/80 rounded-xl border border-neutral-200/80 p-4 space-y-3 shadow-inner"
+          className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2.5 bg-[#fafafa]"
         >
           {isDialing ? (
-            <div className="h-32 flex flex-col items-center justify-center text-center text-amber-700">
+            <div className="h-full flex flex-col items-center justify-center text-center text-amber-700">
               <Radio className="w-6 h-6 mb-2 text-amber-500 animate-pulse" />
               <span className="font-semibold text-xs">Ringing recipient handset...</span>
-              <span className="text-[11px] text-neutral-400 mt-0.5">Awaiting carrier answer signal to begin Live session</span>
+              <span className="text-[11px] text-slate-400 mt-0.5">Awaiting carrier answer signal to begin Live session</span>
             </div>
           ) : activeCall.turns && activeCall.turns.length > 0 ? (
             activeCall.turns.map((t, idx) => {
@@ -95,24 +95,24 @@ export default function LiveCallHud({ activeCall, lastCompletedCall }) {
                   key={idx}
                   className={`flex flex-col ${isAgent ? 'items-start' : 'items-end'}`}
                 >
-                  <div className="flex items-center gap-1.5 text-[10px] text-neutral-400 mb-1 px-1 font-semibold uppercase tracking-wider">
+                  <div className="flex items-center gap-1 text-[10px] text-slate-400 mb-0.5 px-0.5 font-semibold uppercase tracking-wider">
                     {isAgent ? (
                       <span className="inline-flex items-center gap-1 text-[#008792]">
                         <Bot className="w-3 h-3" />
                         <span>Ananya (AI)</span>
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 text-neutral-600">
+                      <span className="inline-flex items-center gap-1 text-slate-600">
                         <User className="w-3 h-3" />
                         <span>Customer</span>
                       </span>
                     )}
                   </div>
                   <div
-                    className={`max-w-[85%] rounded-2xl p-3 text-xs leading-relaxed shadow-xs ${
+                    className={`max-w-[85%] p-2.5 text-xs leading-relaxed border ${
                       isAgent
-                        ? 'bg-white text-neutral-900 border border-[#c3e1e5] rounded-tl-sm'
-                        : 'bg-[#f4f9f9] text-neutral-900 border border-[#e0efef] rounded-tr-sm'
+                        ? 'bg-white text-slate-900 border-slate-200'
+                        : 'bg-[#008792]/10 text-teal-950 border-[#008792]/20'
                     }`}
                   >
                     {t.text}
@@ -121,9 +121,9 @@ export default function LiveCallHud({ activeCall, lastCompletedCall }) {
               );
             })
           ) : (
-            <div className="h-32 flex flex-col items-center justify-center text-center text-[#008792]">
-              <CheckCircle2 className="w-6 h-6 mb-2 text-[#008792] animate-bounce" />
-              <span className="font-semibold text-xs">Connected! Establishing bidirectional Gemini Live stream...</span>
+            <div className="h-full flex flex-col items-center justify-center text-center text-[#008792]">
+              <Radio className="w-6 h-6 mb-2 text-[#008792] animate-pulse" />
+              <span className="font-semibold text-xs">Connected! Audio pipeline active</span>
             </div>
           )}
         </div>
@@ -138,40 +138,42 @@ export default function LiveCallHud({ activeCall, lastCompletedCall }) {
     const diagSummary = lc.diagnostic?.root_cause_summary;
 
     return (
-      <div className="bg-white rounded-2xl border border-[#e5e5e5] p-5 shadow-sm space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-neutral-100">
+      <div className="flex flex-col h-full min-h-0 bg-white">
+        {/* Header */}
+        <div className="px-4 py-2.5 border-b border-slate-200 flex items-center justify-between flex-shrink-0 bg-white">
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-neutral-400" />
-            <span className="text-xs font-bold text-neutral-500 uppercase tracking-wider">
+            <span className="w-1.5 h-1.5 bg-slate-400" />
+            <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
               Last Call Session Recap
             </span>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className={`inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-semibold border ${dispConf.bg} ${dispConf.text} ${dispConf.border}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${dispConf.dot}`} />
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border ${dispConf.bg} ${dispConf.text} ${dispConf.border}`}>
+              <span className={`w-1.5 h-1.5 ${dispConf.dot}`} />
               {dispConf.label}
             </span>
 
-            <span className="inline-flex items-center gap-1 font-mono text-xs text-neutral-600 bg-neutral-100 px-2 py-0.5 rounded">
-              <Clock className="w-3 h-3 text-neutral-400" />
+            <span className="inline-flex items-center gap-1 font-mono text-xs text-slate-600 bg-slate-100 px-2 py-0.5 border border-slate-200">
+              <Clock className="w-3 h-3 text-slate-400" />
               <span>{lc.duration || 0}s</span>
             </span>
           </div>
         </div>
 
-        <div className="flex items-baseline justify-between">
-          <div className="text-lg font-bold font-mono text-neutral-900">
+        {/* Recipient line */}
+        <div className="px-4 py-2 border-b border-slate-200 flex items-center justify-between flex-shrink-0 bg-slate-50/60">
+          <div className="text-base font-bold font-mono text-slate-900">
             {lc.phone_number || 'Completed Session'}
           </div>
-          <span className="text-xs text-neutral-400 font-mono">
+          <span className="text-[11px] text-slate-400 font-mono">
             {lc.ended_at ? new Date(lc.ended_at * 1000).toLocaleTimeString() : ''}
           </span>
         </div>
 
         {diagSummary && (
-          <div className="text-xs bg-[#f4f9f9] border border-[#c3e1e5] rounded-xl p-3 text-neutral-800">
-            <strong className="text-[#008792] block mb-0.5">Diagnostic Report:</strong>
+          <div className="px-4 py-2 border-b border-slate-200 bg-[#008792]/5 text-xs text-slate-800 flex-shrink-0">
+            <strong className="text-[#008792] block text-[11px]">Diagnostic Report:</strong>
             <span>{diagSummary}</span>
           </div>
         )}
@@ -179,7 +181,7 @@ export default function LiveCallHud({ activeCall, lastCompletedCall }) {
         {/* Completed Call Turns Box */}
         <div
           ref={transcriptRef}
-          className="max-h-[200px] overflow-y-auto bg-neutral-50/80 rounded-xl border border-neutral-200/80 p-3 space-y-2 text-xs"
+          className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2.5 bg-[#fafafa]"
         >
           {lc.turns && lc.turns.length > 0 ? (
             lc.turns.map((t, idx) => {
@@ -189,14 +191,14 @@ export default function LiveCallHud({ activeCall, lastCompletedCall }) {
                   key={idx}
                   className={`flex flex-col ${isAgent ? 'items-start' : 'items-end'}`}
                 >
-                  <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wide px-1 mb-0.5">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide px-0.5 mb-0.5">
                     {isAgent ? 'Ananya (AI)' : 'Customer'}
                   </span>
                   <div
-                    className={`max-w-[85%] rounded-xl p-2.5 text-xs leading-relaxed ${
+                    className={`max-w-[85%] p-2.5 text-xs leading-relaxed border ${
                       isAgent
-                        ? 'bg-white text-neutral-900 border border-neutral-200 shadow-2xs'
-                        : 'bg-[#f4f9f9] text-neutral-900 border border-[#c3e1e5]'
+                        ? 'bg-white text-slate-900 border-slate-200'
+                        : 'bg-[#008792]/10 text-teal-950 border-[#008792]/20'
                     }`}
                   >
                     {t.text}
@@ -205,7 +207,7 @@ export default function LiveCallHud({ activeCall, lastCompletedCall }) {
               );
             })
           ) : (
-            <div className="text-center py-4 text-neutral-400 text-xs">
+            <div className="h-full flex items-center justify-center text-center text-slate-400 text-xs">
               No dialog turns captured (call rang out or was terminated immediately).
             </div>
           )}
@@ -216,14 +218,18 @@ export default function LiveCallHud({ activeCall, lastCompletedCall }) {
 
   // Idle state view
   return (
-    <div className="bg-white rounded-2xl border border-[#e5e5e5] p-6 shadow-sm text-center">
-      <div className="w-12 h-12 rounded-2xl bg-[#f4f9f9] border border-[#c3e1e5] flex items-center justify-center text-[#008792] mx-auto mb-3 shadow-xs">
-        <Radio className="w-6 h-6 animate-pulse" />
+    <div className="bg-white p-8 text-center h-full min-h-0 flex flex-col items-center justify-center">
+      <div className="w-12 h-12 bg-[#008792]/10 border border-[#008792]/20 flex items-center justify-center text-[#008792] mb-3">
+        <PhoneCall className="w-6 h-6 animate-pulse" />
       </div>
-      <h3 className="text-sm font-bold text-neutral-900">Audio Terminal Ready</h3>
-      <p className="text-xs text-neutral-500 max-w-sm mx-auto mt-1">
-        Start the automated campaign dialer or place a test call on the right to stream real-time bidirectional audio.
+      <h3 className="text-sm font-bold text-slate-900">Audio Telemetry Standby</h3>
+      <p className="text-xs text-slate-500 max-w-xs mt-1">
+        Start automated OBD dialing or trigger a test call on the right to monitor live AI voice telemetry.
       </p>
+      <div className="mt-4 flex items-center gap-1.5 text-[11px] font-mono text-slate-400 bg-slate-50 border border-slate-200 px-3 py-1">
+        <span className="w-1.5 h-1.5 bg-emerald-500" />
+        <span>Carrier &bull; SIP Trunk 100.1.251.10 Ready</span>
+      </div>
     </div>
   );
 }
