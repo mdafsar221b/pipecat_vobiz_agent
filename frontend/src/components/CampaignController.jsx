@@ -19,7 +19,8 @@ const PREDEFINED_TEST_CONTACTS = [
   { name: 'Krupali', phone: '+919769756433' },
   { name: 'Botify', phone: '+918065521614' },
   { name: 'Prakash', phone: '+917976818025' },
-  {name:'Alok Sir', phone:'+919739998801'},
+  {name:'Tanisq', phone:'+919989988024'},
+  
 ];
 
 // Campaign orchestration controls, KPI cards, and dialer actions
