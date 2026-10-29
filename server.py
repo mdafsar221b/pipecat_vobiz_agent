@@ -249,6 +249,11 @@ async def trigger_dial(request: Request):
             customer_name=payload.get("customer_name", ""),
             status="dialing",
         )
+        db.record_call_start(
+            call_uuid=call_uuid,
+            phone_number=to_number,
+            metadata={"customer_name": payload.get("customer_name", ""), "status": "dialing"},
+        )
         return {"ok": True, "status": "call_initiated", "call_uuid": call_uuid, "vobiz_response": result}
     except Exception as exc:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})

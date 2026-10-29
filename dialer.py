@@ -81,8 +81,26 @@ class OutboundDialer:
         logger.info(f"Queued {len(self.queue)} leads into batch {batch_id}")
         return batch_id
 
+    # Check and clear stuck orphan calls exceeding carrier thresholds
+    def _check_watchdog(self):
+        if not self.active_call:
+            return
+        elapsed = time.time() - self.active_call.get("started_at", time.time())
+        status = self.active_call.get("status", "dialing")
+        uuid = self.active_call.get("call_uuid", "")
+        if (status == "dialing" and elapsed > 60.0) or (status == "in_call" and elapsed > 1800.0):
+            logger.warning(f"Watchdog terminating stuck call {uuid} ({status}) after {elapsed:.1f}s")
+            db.finalize_call(
+                call_uuid=uuid,
+                status="hung_up",
+                disposition="no_answer" if status == "dialing" else "dropped",
+                reason="Watchdog timeout - carrier response or hangup webhook expired",
+            )
+            self.on_call_ended(uuid)
+
     # Calculate live counters for dialer UI
     def get_kpi_counts(self) -> Dict[str, int]:
+        self._check_watchdog()
         is_dialing = 1 if (self.active_call and self.active_call.get("status") == "dialing") else 0
         is_incall = 1 if (self.active_call and self.active_call.get("status") == "in_call") else 0
 
