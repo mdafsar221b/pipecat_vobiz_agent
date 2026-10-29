@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone, timedelta
 import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -52,6 +53,21 @@ AGENT_GREETING = os.getenv(
     "నమస్తే అండి! నేను అనన్య స్వర్గసీమ నుంచి మాట్లాడుతున్నాను. మీరు మాకు మిస్డ్ కాల్ చేశారు. మీకు స్వర్గసీమ ప్రాజెక్ట్స్ లో ఇంట్రెస్ట్ ఉందా అండి?",
 )
 AGENT_SYSTEM_PROMPT = os.getenv("AGENT_SYSTEM_PROMPT", "")
+
+# Build system instruction with dynamic real-time date context
+def build_system_instruction() -> str:
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(ist)
+    current_date_str = now.strftime("%A, %d %B %Y")
+    current_time_str = now.strftime("%I:%M %p")
+    base_prompt = os.getenv("AGENT_SYSTEM_PROMPT", "")
+    temporal_context = (
+        f"\n\n### REAL-TIME TEMPORAL CONTEXT\n"
+        f"- Today's exact date is: {current_date_str}.\n"
+        f"- Current time is: {current_time_str} IST.\n"
+        f"- PAST DATE CORRECTION: You know today's exact date is {current_date_str}. If the customer proposes any date that is in the past (before {current_date_str}), you must immediately correct them politely and ask for an upcoming date (e.g. today, tomorrow, or later this week). Do not accept or agree to any past date."
+    )
+    return base_prompt + temporal_context
 
 # Retrieve active Gemini API key from rotation pool
 def get_gemini_api_key() -> str:
@@ -201,7 +217,7 @@ async def run_vobiz_agent(
     llm = GeminiLiveLLMService(
         api_key=get_gemini_api_key(),
         settings=GeminiLiveLLMService.Settings(
-            system_instruction=AGENT_SYSTEM_PROMPT,
+            system_instruction=build_system_instruction(),
             voice=GEMINI_VOICE,
             model=GEMINI_MODEL,
             vad=GeminiVADParams(
