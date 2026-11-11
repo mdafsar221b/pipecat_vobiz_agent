@@ -35,9 +35,28 @@ class OutboundDialer:
             res = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True, text=True, timeout=25)
             if res.returncode == 0 and res.stdout.strip():
                 data = json.loads(res.stdout.strip())
-                if isinstance(data, dict):
-                    return data.get("calls", [])
-                return data
+                calls = data.get("calls", []) if isinstance(data, dict) else data
+                # Enrich each CRM lead with latest AI voice agent disposition
+                try:
+                    import re
+                    ai_map = db.get_latest_ai_call_by_phone()
+                    for c in calls:
+                        num = c.get("phone_number") or ""
+                        digits = re.sub(r"\D", "", str(num))[-10:]
+                        if digits and digits in ai_map:
+                            ai_info = ai_map[digits]
+                            c["ai_disposition"] = ai_info.get("disposition")
+                            c["ai_call_uuid"] = ai_info.get("call_uuid")
+                            c["ai_call_time"] = ai_info.get("created_at")
+                            c["ai_duration"] = ai_info.get("duration", 0)
+                        else:
+                            c["ai_disposition"] = None
+                            c["ai_call_uuid"] = None
+                            c["ai_call_time"] = None
+                            c["ai_duration"] = 0
+                except Exception as enrich_err:
+                    logger.warning(f"Failed to enrich CRM leads with AI disposition: {enrich_err}")
+                return calls
             logger.warning(f"CRM fetch non-zero exit: {res.stderr}")
         except Exception as exc:
             logger.error(f"CRM pending fetch failed: {exc}")

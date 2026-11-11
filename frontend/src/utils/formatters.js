@@ -83,6 +83,14 @@ export function getDispositionConfig(disposition) {
         border: 'border-red-200',
         dot: 'bg-red-500',
       };
+    case 'inquiry_drop':
+      return {
+        label: 'Inquiry Drop',
+        bg: 'bg-blue-50',
+        text: 'text-blue-700',
+        border: 'border-blue-200',
+        dot: 'bg-blue-500',
+      };
     default:
       return {
         label: disp.toUpperCase(),

@@ -1,7 +1,12 @@
 import os
+from pathlib import Path
 from typing import Any, Dict, Optional
+from dotenv import load_dotenv
 import httpx
 from loguru import logger
+
+BASE_DIR = Path(__file__).parent
+load_dotenv(BASE_DIR / ".env", override=False)
 
 API_BASE = "https://api.vobiz.ai/api/v1"
 AUTH_ID = os.getenv("VOBIZ_AUTH_ID", "")
@@ -10,10 +15,12 @@ FROM_NUMBER = os.getenv("FROM_NUMBER", "") or os.getenv("VOBIZ_PHONE_NUMBER", ""
 
 # Build request headers with Vobiz authentication
 def get_headers() -> Dict[str, str]:
+    auth_id = os.getenv("VOBIZ_AUTH_ID", AUTH_ID)
+    auth_token = os.getenv("VOBIZ_AUTH_TOKEN", AUTH_TOKEN)
     return {
         "Content-Type": "application/json",
-        "X-Auth-ID": AUTH_ID,
-        "X-Auth-Token": AUTH_TOKEN,
+        "X-Auth-ID": auth_id,
+        "X-Auth-Token": auth_token,
     }
 
 # Place an outbound call via Vobiz REST API
@@ -51,8 +58,9 @@ async def place_call(
             logger.error(f"Failed to place Vobiz call to {to_number}: {err_msg}")
             raise RuntimeError(err_msg) from exc
         except httpx.HTTPError as exc:
-            logger.error(f"Failed to place Vobiz call to {to_number}: {exc}")
-            raise
+            err_detail = str(exc) or repr(exc)
+            logger.error(f"Failed to place Vobiz call to {to_number}: {err_detail}")
+            raise RuntimeError(err_detail) from exc
 
 # Terminate an active call via Vobiz REST API
 async def hangup_call(call_uuid: str) -> bool:

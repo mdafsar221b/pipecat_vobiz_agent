@@ -40,7 +40,7 @@ console.log('='.repeat(60));
 console.log('  Starting Pipecat Vobiz Voice AI Suite');
 console.log(`  Backend Python:  ${pythonExe}`);
 console.log('  Backend Server:  http://127.0.0.1:8000');
-console.log('  Frontend Vite:   http://localhost:3000');
+console.log('  Frontend Vite:   http://localhost:5173');
 console.log('='.repeat(60));
 
 // Start services sequentially: tunnel first, then backend and frontend

@@ -6,11 +6,13 @@ import {
   Download,
   Database,
   RefreshCw,
+  Filter,
 } from 'lucide-react';
 
-// Pending missed calls list from CRM with filtering and batch queue actions
+// Pending missed calls list from CRM with AI disposition tracking and dialer queue actions
 export default function PendingCallsTab({
   crmCalls = [],
+  completedCalls = [],
   isLoadingCrm = false,
   crmError = '',
   onFetchCrmCalls,
@@ -22,8 +24,51 @@ export default function PendingCallsTab({
   const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [searchText, setSearchText] = useState('');
   const [uniqueOnly, setUniqueOnly] = useState(true);
+  const [aiFilter, setAiFilter] = useState('all');
   const [deselectedPhones, setDeselectedPhones] = useState(new Set());
   const [isQueueing, setIsQueueing] = useState(false);
+  const [rangeFrom, setRangeFrom] = useState('');
+  const [rangeTo, setRangeTo] = useState('');
+  const selectAllRef = React.useRef(null);
+
+  // Live in-session lookup for calls completed recently
+  const completedMap = useMemo(() => {
+    const map = new Map();
+    for (const c of completedCalls) {
+      const rawNum =
+        c.phone_number ||
+        (c.events || []).find((e) => e.to || e.params?.To)?.to ||
+        (c.events || []).find((e) => e.params?.To)?.params?.To ||
+        '';
+      const num10 = String(rawNum).replace(/\D/g, '').slice(-10);
+      if (num10 && !map.has(num10)) {
+        map.set(num10, {
+          disposition: c.disposition || 'completed',
+          duration: c.duration || 0,
+          call_uuid: c.call_uuid,
+          created_at: c.started || c.created_at,
+        });
+      }
+    }
+    return map;
+  }, [completedCalls]);
+
+  // Resolve latest AI Voice Agent disposition for a CRM record
+  const getAiCallInfo = (c) => {
+    const num10 = String(c.phone_number || '').replace(/\D/g, '').slice(-10);
+    if (completedMap.has(num10)) {
+      return completedMap.get(num10);
+    }
+    if (c.ai_disposition) {
+      return {
+        disposition: c.ai_disposition,
+        duration: c.ai_duration || 0,
+        call_uuid: c.ai_call_uuid,
+        created_at: c.ai_call_time,
+      };
+    }
+    return null;
+  };
 
   // Filter calls by unique numbers
   const sourceCalls = useMemo(() => {
@@ -40,18 +85,79 @@ export default function PendingCallsTab({
     return result;
   }, [crmCalls, uniqueOnly]);
 
-  // Filter calls by text query
+  // Tally counts across AI voice dispositions
+  const dispoCounts = useMemo(() => {
+    const counts = {
+      all: sourceCalls.length,
+      uncalled: 0,
+      called: 0,
+      not_answering_busy: 0,
+      interested: 0,
+      not_interested: 0,
+      wrong_number: 0,
+      no_answer: 0,
+      busy: 0,
+      not_talking: 0,
+      dropped: 0,
+    };
+    for (const c of sourceCalls) {
+      const info = getAiCallInfo(c);
+      const d = (info?.disposition || '').toLowerCase();
+      if (!d) {
+        counts.uncalled++;
+      } else {
+        counts.called++;
+        if (counts[d] !== undefined) counts[d]++;
+        if (['no_answer', 'busy', 'not_talking', 'dropped'].includes(d)) {
+          counts.not_answering_busy++;
+        }
+      }
+    }
+    return counts;
+  }, [sourceCalls, completedMap]);
+
+  // Filter calls by AI disposition and search text
   const filteredCalls = useMemo(() => {
+    let result = sourceCalls;
+
+    // 1. AI Disposition Filter
+    if (aiFilter !== 'all') {
+      result = result.filter((c) => {
+        const info = getAiCallInfo(c);
+        const d = (info?.disposition || '').toLowerCase();
+        if (aiFilter === 'uncalled') return !d;
+        if (aiFilter === 'called') return Boolean(d);
+        if (aiFilter === 'not_answering_busy') {
+          return ['no_answer', 'busy', 'not_talking', 'dropped'].includes(d);
+        }
+        if (aiFilter === 'interested') return d === 'interested';
+        if (aiFilter === 'not_interested') return d === 'not_interested' || d === 'declined';
+        if (aiFilter === 'wrong_number') return d === 'wrong_number';
+        if (aiFilter === 'no_answer') return d === 'no_answer';
+        if (aiFilter === 'busy') return d === 'busy';
+        if (aiFilter === 'not_talking') return d === 'not_talking';
+        if (aiFilter === 'dropped') return d === 'dropped';
+        return d === aiFilter;
+      });
+    }
+
+    // 2. Text Search
     const query = searchText.trim().toLowerCase();
-    if (!query) return sourceCalls;
-    return sourceCalls.filter((c) => {
-      return (
-        (c.phone_number || '').toLowerCase().includes(query) ||
-        (c.customer_name || '').toLowerCase().includes(query) ||
-        (c.source || '').toLowerCase().includes(query)
-      );
-    });
-  }, [sourceCalls, searchText]);
+    if (query) {
+      result = result.filter((c) => {
+        const info = getAiCallInfo(c);
+        const d = (info?.disposition || '').toLowerCase();
+        return (
+          (c.phone_number || '').toLowerCase().includes(query) ||
+          (c.customer_name || '').toLowerCase().includes(query) ||
+          (c.source || '').toLowerCase().includes(query) ||
+          d.includes(query)
+        );
+      });
+    }
+
+    return result;
+  }, [sourceCalls, aiFilter, searchText, completedMap]);
 
   const selectedCalls = useMemo(() => {
     return filteredCalls.filter((c) => !deselectedPhones.has(c.phone_number));
@@ -61,13 +167,70 @@ export default function PendingCallsTab({
     filteredCalls.length > 0 &&
     filteredCalls.every((c) => !deselectedPhones.has(c.phone_number));
 
+  // Select a slice of leads by 1-based index range [fromVal, toVal]
+  const selectRange = (fromVal, toVal) => {
+    if (filteredCalls.length === 0) return;
+
+    let start = parseInt(fromVal, 10);
+    let end = parseInt(toVal, 10);
+
+    if (isNaN(start) && isNaN(end)) {
+      setDeselectedPhones(new Set(sourceCalls.map((c) => c.phone_number)));
+      return;
+    }
+    if (isNaN(start) || start <= 0) start = 1;
+    if (isNaN(end) || end <= 0) end = filteredCalls.length;
+
+    if (start > end) {
+      const temp = start;
+      start = end;
+      end = temp;
+    }
+
+    start = Math.max(1, Math.min(start, filteredCalls.length));
+    end = Math.max(start, Math.min(end, filteredCalls.length));
+
+    const sliceStart = start - 1;
+    const sliceEnd = end;
+    const targetCalls = filteredCalls.slice(sliceStart, sliceEnd);
+    const targetPhoneSet = new Set(targetCalls.map((c) => c.phone_number));
+
+    const nextDeselected = new Set();
+    for (const c of sourceCalls) {
+      if (!targetPhoneSet.has(c.phone_number)) {
+        nextDeselected.add(c.phone_number);
+      }
+    }
+    setDeselectedPhones(nextDeselected);
+  };
+
+  // Select top N leads from filtered list
+  const selectTopN = (n) => {
+    setRangeFrom('1');
+    setRangeTo(String(n));
+    selectRange(1, n);
+  };
+
+  // Toggle selection across all currently filtered leads
   const toggleSelectAll = () => {
-    if (allSelected) {
-      setDeselectedPhones(new Set(filteredCalls.map((c) => c.phone_number)));
+    if (selectedCalls.length === filteredCalls.length && filteredCalls.length > 0) {
+      setRangeFrom('');
+      setRangeTo('');
+      selectRange(0, 0);
     } else {
-      setDeselectedPhones(new Set());
+      setRangeFrom('1');
+      setRangeTo(String(filteredCalls.length));
+      selectRange(1, filteredCalls.length);
     }
   };
+
+  // Keep indeterminate state on header checkbox
+  React.useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate =
+        selectedCalls.length > 0 && selectedCalls.length < filteredCalls.length;
+    }
+  }, [selectedCalls.length, filteredCalls.length]);
 
   const togglePhone = (phone) => {
     const next = new Set(deselectedPhones);
@@ -109,10 +272,11 @@ export default function PendingCallsTab({
     }));
 
     const dateRangeStr = startDate === endDate ? startDate : `${startDate} to ${endDate}`;
+    const aiLabel = aiFilter !== 'all' ? ` [${aiFilter.toUpperCase()}]` : '';
     const payload = {
       leads,
-      batch_name: `CRM Batch (${dateRangeStr}) - ${leads.length} calls`,
-      source_filter: `CRM Missed Calls (${dateRangeStr})`,
+      batch_name: `CRM Batch${aiLabel} (${dateRangeStr}) - ${leads.length} calls`,
+      source_filter: `CRM Missed Calls (${dateRangeStr})${aiFilter !== 'all' ? ` - ${aiFilter}` : ''}`,
     };
 
     try {
@@ -120,6 +284,61 @@ export default function PendingCallsTab({
     } finally {
       setIsQueueing(false);
     }
+  };
+
+  // Render high-contrast clean slate AI disposition badge
+  const renderAiBadge = (c) => {
+    const info = getAiCallInfo(c);
+    if (!info || !info.disposition) {
+      return (
+        <span className="inline-flex items-center text-[11px] font-mono text-slate-400 select-none">
+          --
+        </span>
+      );
+    }
+
+    const d = info.disposition.toLowerCase();
+    let badgeClass = 'bg-slate-100 text-slate-700 border-slate-300';
+    let label = info.disposition.replace(/_/g, ' ');
+
+    if (d === 'interested') {
+      badgeClass = 'bg-emerald-50 text-emerald-700 border-emerald-300';
+      label = 'Interested';
+    } else if (d === 'not_interested' || d === 'declined') {
+      badgeClass = 'bg-rose-50 text-rose-700 border-rose-200';
+      label = 'Not Interested';
+    } else if (d === 'wrong_number') {
+      badgeClass = 'bg-slate-100 text-slate-700 border-slate-300';
+      label = 'Wrong Number';
+    } else if (d === 'no_answer') {
+      badgeClass = 'bg-orange-50 text-orange-700 border-orange-300';
+      label = 'No Answer';
+    } else if (d === 'busy') {
+      badgeClass = 'bg-amber-50 text-amber-700 border-amber-300';
+      label = 'Busy';
+    } else if (d === 'not_talking') {
+      badgeClass = 'bg-amber-50 text-amber-800 border-amber-200';
+      label = 'Not Talking';
+    } else if (d === 'dropped') {
+      badgeClass = 'bg-red-50 text-red-700 border-red-200';
+      label = 'Dropped';
+    }
+
+    return (
+      <div className="flex flex-col items-start gap-0.5">
+        <span
+          className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 border ${badgeClass}`}
+        >
+          <span className="w-1.5 h-1.5 bg-current shrink-0" />
+          <span>{label}</span>
+        </span>
+        {info.duration > 0 && (
+          <span className="text-[10px] font-mono text-slate-400">
+            {Math.round(info.duration)}s
+          </span>
+        )}
+      </div>
+    );
   };
 
   const uniqueNote = uniqueOnly
@@ -176,7 +395,7 @@ export default function PendingCallsTab({
               type="text"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
-              placeholder="Search by phone, name, campaign source..."
+              placeholder="Search by phone, name, source, or AI disposition..."
               className="w-full bg-white border border-slate-200 text-slate-800 text-xs pl-8 pr-3 py-1.5 outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792]"
             />
           </div>
@@ -193,29 +412,191 @@ export default function PendingCallsTab({
           </label>
         </div>
 
-        {/* Action Row */}
+        {/* Action & AI Disposition Filter Row */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/60">
-          <button
-            onClick={() => onFetchCrmCalls(startDate, endDate)}
-            disabled={isLoadingCrm}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition disabled:opacity-40"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingCrm ? 'animate-spin text-[#008792]' : ''}`} />
-            <span>{isLoadingCrm ? 'Querying CRM...' : 'Fetch Calls'}</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => onFetchCrmCalls(startDate, endDate)}
+              disabled={isLoadingCrm}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition disabled:opacity-40"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingCrm ? 'animate-spin text-[#008792]' : ''}`} />
+              <span>{isLoadingCrm ? 'Querying CRM...' : 'Fetch Calls'}</span>
+            </button>
 
-          <button
-            onClick={handleQueueSelected}
-            disabled={isQueueing || selectedCalls.length === 0}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white transition disabled:opacity-40 cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>
-              {isQueueing
-                ? 'Queueing to Dialer...'
-                : `Queue Selected to Dialer (${selectedCalls.length})`}
-            </span>
-          </button>
+            {/* AI Disposition Filter Select */}
+            <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1 text-xs">
+              <Filter className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-[10px] font-bold uppercase text-slate-400">AI Disposition</span>
+              <select
+                value={aiFilter}
+                onChange={(e) => setAiFilter(e.target.value)}
+                className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
+              >
+                <option value="all">All Leads ({sourceCalls.length})</option>
+                <option value="uncalled">Uncalled / Never Dialed ({dispoCounts.uncalled || 0})</option>
+                <option value="called">Any AI Call Made ({dispoCounts.called || 0})</option>
+                <option value="not_answering_busy">Not Answering &amp; Busy ({dispoCounts.not_answering_busy || 0})</option>
+                <option value="interested">Interested ({dispoCounts.interested || 0})</option>
+                <option value="not_interested">Not Interested ({dispoCounts.not_interested || 0})</option>
+                <option value="wrong_number">Wrong Number ({dispoCounts.wrong_number || 0})</option>
+                <option value="not_talking">Not Talking ({dispoCounts.not_talking || 0})</option>
+                <option value="no_answer">No Answer ({dispoCounts.no_answer || 0})</option>
+                <option value="busy">Busy ({dispoCounts.busy || 0})</option>
+                <option value="dropped">Dropped ({dispoCounts.dropped || 0})</option>
+              </select>
+            </div>
+
+            {/* Quick Filter: Uncalled */}
+            <button
+              onClick={() => setAiFilter(aiFilter === 'uncalled' ? 'all' : 'uncalled')}
+              className={`px-2.5 py-1 text-xs font-semibold transition border ${
+                aiFilter === 'uncalled'
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-white text-slate-600 hover:bg-slate-100 border-slate-200'
+              }`}
+            >
+              Uncalled ({dispoCounts.uncalled || 0})
+            </button>
+
+            {/* Quick Filter: Retry Queue */}
+            <button
+              onClick={() => setAiFilter(aiFilter === 'not_answering_busy' ? 'all' : 'not_answering_busy')}
+              className={`px-2.5 py-1 text-xs font-semibold transition border ${
+                aiFilter === 'not_answering_busy'
+                  ? 'bg-amber-600 text-white border-amber-600'
+                  : 'bg-white text-amber-800 hover:bg-amber-50 border-amber-300'
+              }`}
+            >
+              Retry Queue ({dispoCounts.not_answering_busy || 0})
+            </button>
+
+            {aiFilter !== 'all' && (
+              <button
+                onClick={() => setAiFilter('all')}
+                className="text-xs font-semibold text-rose-600 hover:text-rose-700 bg-white border border-rose-200 px-2.5 py-1 transition"
+              >
+                Reset Filter
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Quick Selection & Custom Range Controls */}
+            <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1 text-xs">
+              <span className="text-[10px] font-bold uppercase text-slate-400 select-none">Select:</span>
+              <button
+                type="button"
+                onClick={() => selectTopN(20)}
+                className={`px-2 py-0.5 text-xs font-semibold transition border ${
+                  rangeFrom === '1' && rangeTo === '20' && selectedCalls.length === 20 && selectedCalls.length < filteredCalls.length
+                    ? 'bg-[#008792] text-white border-[#008792]'
+                    : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200'
+                }`}
+                title="Select top 20 leads (1 to 20)"
+              >
+                Top 20
+              </button>
+              <button
+                type="button"
+                onClick={() => selectTopN(50)}
+                className={`px-2 py-0.5 text-xs font-semibold transition border ${
+                  rangeFrom === '1' && rangeTo === '50' && selectedCalls.length === 50 && selectedCalls.length < filteredCalls.length
+                    ? 'bg-[#008792] text-white border-[#008792]'
+                    : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200'
+                }`}
+                title="Select top 50 leads (1 to 50)"
+              >
+                Top 50
+              </button>
+              <button
+                type="button"
+                onClick={() => selectTopN(filteredCalls.length)}
+                className={`px-2 py-0.5 text-xs font-semibold transition border ${
+                  allSelected
+                    ? 'bg-[#008792] text-white border-[#008792]'
+                    : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200'
+                }`}
+                title="Select all filtered leads"
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRangeFrom('');
+                  setRangeTo('');
+                  selectRange(0, 0);
+                }}
+                className="px-2 py-0.5 text-xs font-semibold bg-slate-50 hover:bg-slate-100 text-slate-500 border border-slate-200 transition"
+                title="Deselect all"
+              >
+                None
+              </button>
+
+              <span className="h-3.5 w-px bg-slate-200 mx-0.5" />
+
+              {/* Custom Range: From X to Y */}
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] font-bold uppercase text-slate-400 select-none">From</span>
+                <input
+                  type="number"
+                  min="1"
+                  max={filteredCalls.length || 1000}
+                  value={rangeFrom}
+                  onChange={(e) => setRangeFrom(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      selectRange(rangeFrom, rangeTo);
+                    }
+                  }}
+                  placeholder="1"
+                  className="w-14 px-1.5 py-0.5 text-xs border border-slate-200 text-slate-800 text-center outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792]"
+                  title="Starting lead index (e.g. 50)"
+                />
+                <span className="text-[10px] font-bold uppercase text-slate-400 select-none">To</span>
+                <input
+                  type="number"
+                  min="1"
+                  max={filteredCalls.length || 1000}
+                  value={rangeTo}
+                  onChange={(e) => setRangeTo(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      selectRange(rangeFrom, rangeTo);
+                    }
+                  }}
+                  placeholder={String(Math.min(50, filteredCalls.length || 50))}
+                  className="w-14 px-1.5 py-0.5 text-xs border border-slate-200 text-slate-800 text-center outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792]"
+                  title="Ending lead index (e.g. 100)"
+                />
+                <button
+                  type="button"
+                  onClick={() => selectRange(rangeFrom, rangeTo)}
+                  disabled={!rangeFrom && !rangeTo}
+                  className="px-2 py-0.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition disabled:opacity-40"
+                  title="Apply custom index range"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+
+            <button
+              onClick={handleQueueSelected}
+              disabled={isQueueing || selectedCalls.length === 0}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white transition disabled:opacity-40 cursor-pointer shadow-sm"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>
+                {isQueueing
+                  ? 'Queueing to Dialer...'
+                  : `Queue Selected to Dialer (${selectedCalls.length})`}
+              </span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -226,43 +607,46 @@ export default function PendingCallsTab({
             <tr className="bg-slate-50/90 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px] sticky top-0 z-10 backdrop-blur-sm">
               <th className="w-10 px-3.5 py-3">
                 <input
+                  ref={selectAllRef}
                   type="checkbox"
                   checked={allSelected}
                   onChange={toggleSelectAll}
                   className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
                 />
               </th>
+              <th className="w-8 px-2 py-3 text-slate-400 font-mono text-[10px]">#</th>
               <th className="px-3.5 py-3">Customer Number</th>
               <th className="px-3.5 py-3">Customer Name</th>
               <th className="px-3.5 py-3">Marketing Source</th>
               <th className="px-3.5 py-3">Missed Agent</th>
               <th className="px-3.5 py-3">Missed Time</th>
               <th className="px-3.5 py-3">Ring</th>
-              <th className="px-3.5 py-3">Status</th>
+              <th className="px-3.5 py-3">CRM Status</th>
+              <th className="px-3.5 py-3">AI Disposition</th>
               <th className="px-3.5 py-3 text-right">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {isLoadingCrm ? (
               <tr>
-                <td colSpan="9" className="text-center text-slate-400 py-12">
+                <td colSpan="11" className="text-center text-slate-400 py-12">
                   <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
                   <span className="font-medium text-xs">Querying MongoDB CRM for inbound missed leads...</span>
                 </td>
               </tr>
             ) : crmError ? (
               <tr>
-                <td colSpan="9" className="text-center text-rose-600 py-8 bg-rose-50/40">
+                <td colSpan="11" className="text-center text-rose-600 py-8 bg-rose-50/40">
                   <span className="font-semibold text-xs">Failed to load calls from CRM: {crmError}</span>
                 </td>
               </tr>
             ) : filteredCalls.length === 0 ? (
               <tr>
-                <td colSpan="9" className="text-center text-slate-400 py-12">
+                <td colSpan="11" className="text-center text-slate-400 py-12">
                   <span className="text-xs font-medium">
                     {crmCalls.length === 0
                       ? "Click 'Fetch Calls' above to load pending leads from CRM."
-                      : 'No calls match the current search or unique filter.'}
+                      : 'No calls match the current search or AI disposition filter.'}
                   </span>
                 </td>
               </tr>
@@ -291,6 +675,9 @@ export default function PendingCallsTab({
                         className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
                       />
                     </td>
+                    <td className="px-2 py-3 font-mono text-[11px] text-slate-400 whitespace-nowrap">
+                      {idx + 1}
+                    </td>
                     <td className="px-3.5 py-3 font-mono font-bold text-slate-900 whitespace-nowrap">
                       {c.phone_number}
                     </td>
@@ -316,6 +703,9 @@ export default function PendingCallsTab({
                         Pending
                       </span>
                     </td>
+                    <td className="px-3.5 py-3 whitespace-nowrap">
+                      {renderAiBadge(c)}
+                    </td>
                     <td className="px-3.5 py-3 text-right whitespace-nowrap">
                       <button
                         onClick={() => onTriggerManualDial(c.phone_number, c.customer_name || '')}
@@ -339,6 +729,11 @@ export default function PendingCallsTab({
         <span>
           Showing <strong className="text-slate-800">{filteredCalls.length}</strong> of{' '}
           <strong className="text-slate-800">{sourceCalls.length}</strong> pending calls{uniqueNote}
+          {aiFilter !== 'all' && (
+            <span className="text-[#008792] font-semibold ml-1.5">
+              (Filtered: {aiFilter.replace(/_/g, ' ')})
+            </span>
+          )}
         </span>
         <div className="flex items-center gap-1.5 text-slate-400">
           <Database className="w-3.5 h-3.5" />

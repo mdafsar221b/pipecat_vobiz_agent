@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Optional
+from typing import Callable, Optional
 from loguru import logger
 import diagnostics
 
@@ -29,6 +29,8 @@ class VobizFrameSerializer(BaseVobizFrameSerializer):
         )
         self.stream_ready_event = asyncio.Event()
         self.is_greeting_playing = False
+        self.greeting_inbound_buffer = bytearray()
+        self.on_inbound_audio: Optional[Callable[[bytes], None]] = None
 
     # Set call identifiers dynamically
     def set_call_identifiers(self, call_uuid: str, stream_id: Optional[str] = None) -> None:
@@ -75,4 +77,11 @@ class VobizFrameSerializer(BaseVobizFrameSerializer):
         if isinstance(frame, InputAudioRawFrame):
             if frame.audio and self._call_id:
                 diagnostics.get_tracer(self._call_id).record_audio_in(len(frame.audio))
+            if self.is_greeting_playing and frame.audio:
+                self.greeting_inbound_buffer.extend(frame.audio)
+                max_bytes = 16000 * 2 * 2
+                if len(self.greeting_inbound_buffer) > max_bytes:
+                    self.greeting_inbound_buffer = self.greeting_inbound_buffer[-max_bytes:]
+            elif self.on_inbound_audio and frame.audio:
+                self.on_inbound_audio(frame.audio)
         return frame

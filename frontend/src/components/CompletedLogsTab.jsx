@@ -16,6 +16,7 @@ import {
   Search,
   X,
   RotateCcw,
+  Download,
 } from 'lucide-react';
 import {
   formatBytes,
@@ -25,14 +26,20 @@ import {
   getDiagnosticConfig,
 } from '../utils/formatters';
 
-// Comprehensive filter and inspection suite for completed call history
+// Completed calls inspection table with date filtering and batch re-queueing
 export default function CompletedLogsTab({
   completedCalls = [],
   isLoadingLogs = false,
   onRefreshLogs,
+  onQueueLeads,
 }) {
   const [openTranscriptId, setOpenTranscriptId] = useState(null);
   const [openTimelineId, setOpenTimelineId] = useState(null);
+
+  // Date Filter State
+  const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dateFilterActive, setDateFilterActive] = useState(false);
 
   // Filters State
   const [searchQuery, setSearchQuery] = useState('');
@@ -42,6 +49,11 @@ export default function CompletedLogsTab({
   const [callbackOnly, setCallbackOnly] = useState(false);
   const [durationFilter, setDurationFilter] = useState('all');
   const [sortBy, setSortBy] = useState('newest');
+  const [uniqueOnly, setUniqueOnly] = useState(true);
+
+  // Lead Selection State for Batch Creation
+  const [selectedUuids, setSelectedUuids] = useState(new Set());
+  const [isQueueing, setIsQueueing] = useState(false);
 
   const toggleTranscript = (callUuid) => {
     setOpenTranscriptId((prev) => (prev === callUuid ? null : callUuid));
@@ -49,6 +61,29 @@ export default function CompletedLogsTab({
 
   const toggleTimeline = (callUuid) => {
     setOpenTimelineId((prev) => (prev === callUuid ? null : callUuid));
+  };
+
+  const setDateToday = () => {
+    const today = new Date().toISOString().slice(0, 10);
+    setStartDate(today);
+    setEndDate(today);
+    setDateFilterActive(true);
+    if (onRefreshLogs) onRefreshLogs(today, today);
+  };
+
+  const setDateYesterday = () => {
+    const y = new Date();
+    y.setDate(y.getDate() - 1);
+    const yesterday = y.toISOString().slice(0, 10);
+    setStartDate(yesterday);
+    setEndDate(yesterday);
+    setDateFilterActive(true);
+    if (onRefreshLogs) onRefreshLogs(yesterday, yesterday);
+  };
+
+  const handleFetchCalls = () => {
+    setDateFilterActive(true);
+    if (onRefreshLogs) onRefreshLogs(startDate, endDate);
   };
 
   const resetAllFilters = () => {
@@ -59,9 +94,12 @@ export default function CompletedLogsTab({
     setCallbackOnly(false);
     setDurationFilter('all');
     setSortBy('newest');
+    setUniqueOnly(true);
+    setDateFilterActive(false);
+    if (onRefreshLogs) onRefreshLogs(null, null);
   };
 
-  // Compute disposition counts across dataset
+  // Compute counts across dataset
   const dispositionCounts = useMemo(() => {
     const counts = { all: completedCalls.length };
     for (const entry of completedCalls) {
@@ -71,11 +109,28 @@ export default function CompletedLogsTab({
     return counts;
   }, [completedCalls]);
 
+  const notAnsweringCount = useMemo(() => {
+    return completedCalls.filter((c) => {
+      const d = (c.disposition || '').toLowerCase();
+      return ['no_answer', 'busy', 'not_talking', 'dropped'].includes(d);
+    }).length;
+  }, [completedCalls]);
+
   // Filter and sort calls
   const filteredCalls = useMemo(() => {
     let result = [...completedCalls];
 
-    // 1. Text Search (phone, name, UUID, reason, diagnostic summary, or dialog turn text)
+    // 1. Date Range Filter
+    if (dateFilterActive && startDate && endDate) {
+      result = result.filter((entry) => {
+        const rawTime = entry.started || entry.created_at;
+        if (!rawTime) return true;
+        const callDate = new Date(rawTime).toISOString().slice(0, 10);
+        return callDate >= startDate && callDate <= endDate;
+      });
+    }
+
+    // 2. Text Search (phone, name, UUID, reason, diagnostic summary, or dialog turn text)
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       result = result.filter((entry) => {
@@ -96,10 +151,13 @@ export default function CompletedLogsTab({
       });
     }
 
-    // 2. Disposition Filter
+    // 3. Disposition Filter
     if (dispositionFilter !== 'all') {
       result = result.filter((entry) => {
         const disp = (entry.disposition || 'completed').toLowerCase();
+        if (dispositionFilter === 'not_answering_busy') {
+          return ['no_answer', 'busy', 'not_talking', 'dropped'].includes(disp);
+        }
         if (dispositionFilter === 'interested') return disp === 'interested';
         if (dispositionFilter === 'not_interested') return disp === 'not_interested' || disp === 'declined';
         if (dispositionFilter === 'wrong_number') return disp === 'wrong_number';
@@ -110,7 +168,7 @@ export default function CompletedLogsTab({
       });
     }
 
-    // 3. Health / Diagnostic Classification
+    // 4. Health / Diagnostic Classification
     if (healthFilter !== 'all') {
       result = result.filter((entry) => {
         const cls = (entry.diagnostic?.classification || '').toLowerCase();
@@ -118,7 +176,7 @@ export default function CompletedLogsTab({
       });
     }
 
-    // 4. Audio Recording Filter
+    // 5. Audio Recording Filter
     if (recordingOnly) {
       result = result.filter((entry) => {
         const recEvent = (entry.events || []).find((e) => e.kind === 'recording');
@@ -131,12 +189,12 @@ export default function CompletedLogsTab({
       });
     }
 
-    // 5. Callback Scheduled Filter
+    // 6. Callback Scheduled Filter
     if (callbackOnly) {
       result = result.filter((entry) => Boolean(entry.callback_time));
     }
 
-    // 6. Duration Filter
+    // 7. Duration Filter
     if (durationFilter !== 'all') {
       result = result.filter((entry) => {
         const hangupEvent = (entry.events || []).find((e) => e.kind === 'hangup');
@@ -155,7 +213,7 @@ export default function CompletedLogsTab({
       });
     }
 
-    // 7. Sorting
+    // 8. Sorting
     result.sort((a, b) => {
       if (sortBy === 'oldest') {
         return new Date(a.started || a.created_at || 0) - new Date(b.started || b.created_at || 0);
@@ -169,9 +227,34 @@ export default function CompletedLogsTab({
       return new Date(b.started || b.created_at || 0) - new Date(a.started || a.created_at || 0);
     });
 
+    // 9. Unique Callers Filter (preserves latest interaction per 10-digit number)
+    if (uniqueOnly) {
+      const seen = new Set();
+      const uniqueList = [];
+      for (const entry of result) {
+        const rawNum =
+          entry.phone_number ||
+          (entry.events || []).find((e) => e.to || e.params?.To)?.to ||
+          (entry.events || []).find((e) => e.params?.To)?.params?.To ||
+          (entry.events || []).find((e) => e.params?.From)?.params?.From ||
+          '';
+        const num10 = String(rawNum).replace(/\D/g, '').slice(-10);
+        if (num10 && !seen.has(num10)) {
+          seen.add(num10);
+          uniqueList.push(entry);
+        } else if (!num10) {
+          uniqueList.push(entry);
+        }
+      }
+      result = uniqueList;
+    }
+
     return result;
   }, [
     completedCalls,
+    dateFilterActive,
+    startDate,
+    endDate,
     searchQuery,
     dispositionFilter,
     healthFilter,
@@ -179,9 +262,87 @@ export default function CompletedLogsTab({
     callbackOnly,
     durationFilter,
     sortBy,
+    uniqueOnly,
   ]);
 
+  // Selection helpers
+  const selectedCalls = useMemo(() => {
+    return filteredCalls.filter((c) => selectedUuids.has(c.call_uuid));
+  }, [filteredCalls, selectedUuids]);
+
+  const allSelected = filteredCalls.length > 0 && filteredCalls.every((c) => selectedUuids.has(c.call_uuid));
+
+  const toggleSelect = (uuid) => {
+    setSelectedUuids((prev) => {
+      const next = new Set(prev);
+      if (next.has(uuid)) {
+        next.delete(uuid);
+      } else {
+        next.add(uuid);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedUuids(new Set());
+    } else {
+      setSelectedUuids(new Set(filteredCalls.map((c) => c.call_uuid)));
+    }
+  };
+
+  // Queue selected completed calls to outbound dialer
+  const handleQueueSelected = async () => {
+    if (selectedCalls.length === 0) return;
+    setIsQueueing(true);
+    try {
+      const leads = selectedCalls
+        .map((c) => {
+          const num = c.phone_number || (c.events || []).find((e) => e.to || e.params?.To)?.to || '';
+          const name = c.customer_name || c.contact_name || '';
+          const disp = c.disposition || 'retry';
+          return {
+            phone_number: num,
+            customer_name: name,
+            source: `Call Logs Retry (${disp})`,
+            metadata: {
+              original_uuid: c.call_uuid,
+              prev_disposition: disp,
+              callback_time: c.callback_time,
+            },
+          };
+        })
+        .filter((l) => Boolean(l.phone_number));
+
+      if (leads.length === 0) {
+        alert('No valid phone numbers found in selected calls.');
+        return;
+      }
+
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const dispLabel = dispositionFilter !== 'all' ? dispositionFilter.toUpperCase() : 'CALL LOGS';
+      const batchName = `Call Logs Retry [${dispLabel}] (${timeStr}) - ${leads.length} calls`;
+      const sourceFilter = `Call Logs (${startDate} to ${endDate})`;
+
+      if (onQueueLeads) {
+        await onQueueLeads({
+          leads,
+          batch_name: batchName,
+          source_filter: sourceFilter,
+        });
+        setSelectedUuids(new Set());
+      }
+    } catch (err) {
+      alert(`Failed to queue leads: ${err.message}`);
+    } finally {
+      setIsQueueing(false);
+    }
+  };
+
   const activeFiltersCount = [
+    dateFilterActive,
     Boolean(searchQuery.trim()),
     dispositionFilter !== 'all',
     healthFilter !== 'all',
@@ -205,7 +366,7 @@ export default function CompletedLogsTab({
         </div>
 
         <button
-          onClick={onRefreshLogs}
+          onClick={() => onRefreshLogs && onRefreshLogs(dateFilterActive ? startDate : null, dateFilterActive ? endDate : null)}
           disabled={isLoadingLogs}
           className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition self-start sm:self-auto disabled:opacity-40"
         >
@@ -214,124 +375,157 @@ export default function CompletedLogsTab({
         </button>
       </div>
 
-      {/* Filter Control Center */}
-      <div className="bg-slate-50/80 border border-slate-200 p-3.5 space-y-3">
-        {/* Row 1: Search & Primary Selects */}
+      {/* Date Filter & Batch Queue Toolbar */}
+      <div className="bg-slate-50/70 border border-slate-200 p-3.5 space-y-3">
         <div className="flex flex-wrap items-center gap-2.5">
-          {/* Universal Search Input */}
-          <div className="relative flex-1 min-w-[240px]">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          {/* Date Picker Group */}
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1.5 text-xs">
+            <Calendar className="w-3.5 h-3.5 text-slate-400" />
+            <span className="text-[10px] font-bold uppercase text-slate-400">From</span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1.5 text-xs">
+            <Calendar className="w-3.5 h-3.5 text-slate-400" />
+            <span className="text-[10px] font-bold uppercase text-slate-400">To</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
+            />
+          </div>
+
+          <div className="flex gap-1.5">
+            <button
+              onClick={setDateToday}
+              className="px-3 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition"
+            >
+              Today
+            </button>
+            <button
+              onClick={setDateYesterday}
+              className="px-3 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition"
+            >
+              Yesterday
+            </button>
+          </div>
+
+          {/* Search Box */}
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search phone, contact name, UUID, or dialog text..."
-              className="w-full bg-white border border-slate-200 text-slate-800 text-xs pl-8 pr-8 py-2 outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792]"
+              placeholder="Search by phone, name, UUID, dialog text..."
+              className="w-full bg-white border border-slate-200 text-slate-800 text-xs pl-8 pr-3 py-1.5 outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792]"
             />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
           </div>
 
-          {/* Disposition Dropdown */}
-          <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1.5 text-xs">
-            <span className="text-[10px] font-bold uppercase text-slate-400">Disposition</span>
-            <select
-              value={dispositionFilter}
-              onChange={(e) => setDispositionFilter(e.target.value)}
-              className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
-            >
-              <option value="all">All Dispositions</option>
-              <option value="interested">Interested ({dispositionCounts.interested || 0})</option>
-              <option value="not_interested">Not Interested ({dispositionCounts.not_interested || 0})</option>
-              <option value="wrong_number">Wrong Number ({dispositionCounts.wrong_number || 0})</option>
-              <option value="not_talking">Not Talking ({dispositionCounts.not_talking || 0})</option>
-              <option value="no_answer">No Answer ({dispositionCounts.no_answer || 0})</option>
-              <option value="dropped">Dropped ({dispositionCounts.dropped || 0})</option>
-            </select>
-          </div>
-
-          {/* Stream Health Dropdown */}
-          <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1.5 text-xs">
-            <span className="text-[10px] font-bold uppercase text-slate-400">Health</span>
-            <select
-              value={healthFilter}
-              onChange={(e) => setHealthFilter(e.target.value)}
-              className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
-            >
-              <option value="all">All Stream States</option>
-              <option value="success">Bidirectional OK</option>
-              <option value="no_incoming_audio">No Inbound Audio</option>
-              <option value="incoming_audio_exists_gemini_missing">Gemini Output Missing</option>
-              <option value="gemini_audio_produced_caller_silence">Caller Silence</option>
-              <option value="everything_stopped_together">Early Disconnect</option>
-            </select>
-          </div>
-
-          {/* Sort By Dropdown */}
-          <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1.5 text-xs">
-            <span className="text-[10px] font-bold uppercase text-slate-400">Sort</span>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
-            >
-              <option value="newest">Newest First</option>
-              <option value="oldest">Oldest First</option>
-              <option value="duration_desc">Longest Duration</option>
-              <option value="turns_desc">Most Dialog Turns</option>
-            </select>
-          </div>
+          {/* Unique Checkbox */}
+          <label className="flex items-center gap-2 text-xs text-slate-700 font-medium cursor-pointer select-none bg-white px-2.5 py-1.5 border border-slate-200">
+            <input
+              type="checkbox"
+              checked={uniqueOnly}
+              onChange={(e) => setUniqueOnly(e.target.checked)}
+              className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
+            />
+            <span>Unique callers only</span>
+          </label>
         </div>
 
-        {/* Row 2: Quick Filter Chips & Toggles */}
+        {/* Action Row: Fetch Calls on Left & Queue Selected on Right */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/60">
+          <button
+            onClick={handleFetchCalls}
+            disabled={isLoadingLogs}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition disabled:opacity-40"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingLogs ? 'animate-spin text-[#008792]' : ''}`} />
+            <span>{isLoadingLogs ? 'Querying Logs...' : 'Fetch Calls'}</span>
+          </button>
+
+          <button
+            onClick={handleQueueSelected}
+            disabled={isQueueing || selectedCalls.length === 0}
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white transition disabled:opacity-40 cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>
+              {isQueueing
+                ? 'Queueing to Dialer...'
+                : `Queue Selected to Dialer (${selectedCalls.length})`}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* Quick Filter Chips & Dropdowns */}
+      <div className="bg-slate-50/80 border border-slate-200 p-3 space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
             {/* Quick Disposition Chips */}
             <button
               onClick={() => setDispositionFilter('all')}
-              className={`px-2.5 py-1 text-xs font-semibold transition ${
+              className={`px-2.5 py-1 text-xs font-semibold transition border ${
                 dispositionFilter === 'all'
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-white text-slate-600 hover:bg-slate-100 border-slate-200'
               }`}
             >
               All ({completedCalls.length})
             </button>
+
+            {/* Targeted Not Answering & Busy Retry Filter */}
             <button
-              onClick={() => setDispositionFilter('interested')}
-              className={`px-2.5 py-1 text-xs font-semibold transition ${
-                dispositionFilter === 'interested'
-                  ? 'bg-emerald-600 text-white'
-                  : 'bg-white text-emerald-700 hover:bg-emerald-50 border border-emerald-200'
+              onClick={() => setDispositionFilter('not_answering_busy')}
+              className={`px-2.5 py-1 text-xs font-semibold transition border ${
+                dispositionFilter === 'not_answering_busy'
+                  ? 'bg-amber-600 text-white border-amber-600'
+                  : 'bg-white text-amber-800 hover:bg-amber-50 border-amber-300'
               }`}
+              title="Filter No Answer, Busy, Silent, or Dropped calls for re-dialing"
             >
-              Interested ({dispositionCounts.interested || 0})
+              Not Answering / Busy ({notAnsweringCount})
             </button>
-            <button
-              onClick={() => setDispositionFilter('not_interested')}
-              className={`px-2.5 py-1 text-xs font-semibold transition ${
-                dispositionFilter === 'not_interested'
-                  ? 'bg-rose-600 text-white'
-                  : 'bg-white text-rose-700 hover:bg-rose-50 border border-rose-200'
-              }`}
-            >
-              Not Interested ({dispositionCounts.not_interested || 0})
-            </button>
+
             <button
               onClick={() => setDispositionFilter('no_answer')}
-              className={`px-2.5 py-1 text-xs font-semibold transition ${
+              className={`px-2.5 py-1 text-xs font-semibold transition border ${
                 dispositionFilter === 'no_answer'
-                  ? 'bg-amber-600 text-white'
-                  : 'bg-white text-amber-700 hover:bg-amber-50 border border-amber-200'
+                  ? 'bg-amber-600 text-white border-amber-600'
+                  : 'bg-white text-amber-700 hover:bg-amber-50 border-amber-200'
               }`}
             >
               No Answer ({dispositionCounts.no_answer || 0})
+            </button>
+
+            <button
+              onClick={() => setDispositionFilter('not_interested')}
+              className={`px-2.5 py-1 text-xs font-semibold transition border ${
+                dispositionFilter === 'not_interested'
+                  ? 'bg-rose-600 text-white border-rose-600'
+                  : 'bg-white text-rose-700 hover:bg-rose-50 border-rose-200'
+              }`}
+            >
+              Declined ({dispositionCounts.not_interested || 0})
+            </button>
+
+            <button
+              onClick={() => setDispositionFilter('interested')}
+              className={`px-2.5 py-1 text-xs font-semibold transition border ${
+                dispositionFilter === 'interested'
+                  ? 'bg-emerald-600 text-white border-emerald-600'
+                  : 'bg-white text-emerald-700 hover:bg-emerald-50 border-emerald-200'
+              }`}
+            >
+              Interested ({dispositionCounts.interested || 0})
             </button>
 
             <div className="h-4 w-px bg-slate-200 mx-1 hidden sm:block" />
@@ -361,22 +555,6 @@ export default function CompletedLogsTab({
               <Calendar className="w-3.5 h-3.5 text-emerald-600" />
               <span>Callback Scheduled</span>
             </button>
-
-            {/* Duration select filter */}
-            <div className="flex items-center gap-1 bg-white border border-slate-200 px-2 py-1 text-xs">
-              <Clock className="w-3.5 h-3.5 text-slate-400" />
-              <select
-                value={durationFilter}
-                onChange={(e) => setDurationFilter(e.target.value)}
-                className="outline-none text-slate-700 bg-transparent text-xs font-medium cursor-pointer"
-              >
-                <option value="all">Any Duration</option>
-                <option value="under15">&lt; 15s (Short)</option>
-                <option value="15to30">15s - 30s</option>
-                <option value="30to60">30s - 60s</option>
-                <option value="over60">&gt; 1 minute</option>
-              </select>
-            </div>
           </div>
 
           {/* Active Filter Clear Action */}
@@ -390,14 +568,92 @@ export default function CompletedLogsTab({
             </button>
           )}
         </div>
+
+        {/* Secondary Select Dropdowns */}
+        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200/60">
+          {/* Disposition Dropdown */}
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1 text-xs">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Disposition</span>
+            <select
+              value={dispositionFilter}
+              onChange={(e) => setDispositionFilter(e.target.value)}
+              className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
+            >
+              <option value="all">All Dispositions</option>
+              <option value="not_answering_busy">Not Answering &amp; Busy (Retry Queue)</option>
+              <option value="interested">Interested ({dispositionCounts.interested || 0})</option>
+              <option value="not_interested">Not Interested ({dispositionCounts.not_interested || 0})</option>
+              <option value="wrong_number">Wrong Number ({dispositionCounts.wrong_number || 0})</option>
+              <option value="not_talking">Not Talking ({dispositionCounts.not_talking || 0})</option>
+              <option value="no_answer">No Answer ({dispositionCounts.no_answer || 0})</option>
+              <option value="dropped">Dropped ({dispositionCounts.dropped || 0})</option>
+            </select>
+          </div>
+
+          {/* Stream Health Dropdown */}
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1 text-xs">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Health</span>
+            <select
+              value={healthFilter}
+              onChange={(e) => setHealthFilter(e.target.value)}
+              className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
+            >
+              <option value="all">All Stream States</option>
+              <option value="success">Bidirectional OK</option>
+              <option value="no_incoming_audio">No Inbound Audio</option>
+              <option value="incoming_audio_exists_gemini_missing">Gemini Output Missing</option>
+              <option value="gemini_audio_produced_caller_silence">Caller Silence</option>
+              <option value="everything_stopped_together">Early Disconnect</option>
+            </select>
+          </div>
+
+          {/* Duration select filter */}
+          <div className="flex items-center gap-1 bg-white border border-slate-200 px-2.5 py-1 text-xs">
+            <Clock className="w-3.5 h-3.5 text-slate-400" />
+            <select
+              value={durationFilter}
+              onChange={(e) => setDurationFilter(e.target.value)}
+              className="outline-none text-slate-700 bg-transparent text-xs font-medium cursor-pointer"
+            >
+              <option value="all">Any Duration</option>
+              <option value="under15">&lt; 15s (Short)</option>
+              <option value="15to30">15s - 30s</option>
+              <option value="30to60">30s - 60s</option>
+              <option value="over60">&gt; 1 minute</option>
+            </select>
+          </div>
+
+          {/* Sort By Dropdown */}
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1 text-xs">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Sort</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="duration_desc">Longest Duration</option>
+              <option value="turns_desc">Most Dialog Turns</option>
+            </select>
+          </div>
+        </div>
       </div>
 
-      {/* Results Header */}
-      <div className="flex items-center justify-between mb-3 text-xs text-slate-500 font-medium px-1">
-        <span>
-          Showing <strong className="text-slate-800">{filteredCalls.length}</strong> of{' '}
-          <strong className="text-slate-800">{completedCalls.length}</strong> calls
-        </span>
+      {/* Results & Selection Header */}
+      <div className="flex items-center justify-between text-xs text-slate-500 font-medium px-1">
+        <div className="flex items-center gap-2">
+          <span>
+            Showing <strong className="text-slate-800">{filteredCalls.length}</strong> of{' '}
+            <strong className="text-slate-800">{completedCalls.length}</strong> calls
+            {uniqueOnly && ' (unique callers)'}
+          </span>
+          {selectedCalls.length > 0 && (
+            <span className="text-[#008792] font-semibold">
+              ({selectedCalls.length} selected for dialer queue)
+            </span>
+          )}
+        </div>
         {activeFiltersCount > 0 && (
           <span className="text-[#008792] font-semibold text-xs">
             {activeFiltersCount} active filter{activeFiltersCount > 1 ? 's' : ''} applied
@@ -406,10 +662,18 @@ export default function CompletedLogsTab({
       </div>
 
       {/* Call Logs Table View */}
-      <div className="overflow-x-auto max-h-[calc(100vh-270px)] border border-slate-200 bg-white">
+      <div className="overflow-x-auto max-h-[calc(100vh-320px)] border border-slate-200 bg-white">
         <table className="w-full border-collapse text-left text-xs">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px] sticky top-0 z-10 backdrop-blur-sm">
+              <th className="w-10 px-3.5 py-3">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={toggleSelectAll}
+                  className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
+                />
+              </th>
               <th className="px-3.5 py-3 whitespace-nowrap">Recipient</th>
               <th className="px-3.5 py-3 whitespace-nowrap">Disposition</th>
               <th className="px-3.5 py-3 whitespace-nowrap">Stream Health</th>
@@ -423,7 +687,7 @@ export default function CompletedLogsTab({
           <tbody className="divide-y divide-slate-200">
             {filteredCalls.length === 0 ? (
               <tr>
-                <td colSpan={8} className="text-center py-12 bg-slate-50/50">
+                <td colSpan={9} className="text-center py-12 bg-slate-50/50">
                   <Phone className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                   <p className="text-xs font-semibold text-slate-700">No calls match the selected filters</p>
                   <p className="text-[11px] text-slate-400 mt-1 max-w-sm mx-auto">
@@ -478,10 +742,21 @@ export default function CompletedLogsTab({
                 const isTimelineOpen = openTimelineId === entry.call_uuid;
                 const turnsCount = (entry.turns || []).length;
                 const eventsCount = (entry.events || []).length;
+                const isChecked = selectedUuids.has(entry.call_uuid);
 
                 return (
                   <React.Fragment key={entry.call_uuid}>
-                    <tr className={`hover:bg-slate-50/80 transition-colors ${isTranscriptOpen || isTimelineOpen ? 'bg-slate-50/50' : ''}`}>
+                    <tr className={`hover:bg-slate-50/80 transition-colors ${isChecked ? 'bg-[#008792]/5' : isTranscriptOpen || isTimelineOpen ? 'bg-slate-50/50' : ''}`}>
+                      {/* Checkbox Column */}
+                      <td className="px-3.5 py-3">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleSelect(entry.call_uuid)}
+                          className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
+                        />
+                      </td>
+
                       {/* Recipient Column */}
                       <td className="px-3.5 py-3 whitespace-nowrap">
                         <div className="flex items-center gap-2">
@@ -606,7 +881,7 @@ export default function CompletedLogsTab({
                     {/* Expandable Accordion Row for Transcript & Timeline */}
                     {(isTranscriptOpen || isTimelineOpen) && (
                       <tr className="bg-slate-50/70 border-b border-slate-200">
-                        <td colSpan={8} className="p-3.5">
+                        <td colSpan={9} className="p-3.5">
                           {isTranscriptOpen && (
                             <div className="bg-white border border-slate-200 p-3 space-y-2 mb-2.5">
                               <div className="flex items-center justify-between pb-2 border-b border-slate-100 text-xs">

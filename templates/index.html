@@ -711,7 +711,19 @@
               <span>Unique numbers only</span>
             </label>
             <button class="btn btn-primary" id="btnApplyFilter">Fetch Calls</button>
-            <button class="btn btn-success" id="btnQueueAllFiltered" style="margin-left: auto;">Queue All to Dialer</button>
+            <div style="display: flex; align-items: center; gap: 4px; margin-left: auto;">
+              <span style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600;">Select:</span>
+              <button class="btn btn-secondary" id="btnSelectTop20" style="padding: 3px 6px; font-size: 0.7rem;">Top 20</button>
+              <button class="btn btn-secondary" id="btnSelectTop50" style="padding: 3px 6px; font-size: 0.7rem;">Top 50</button>
+              <button class="btn btn-secondary" id="btnSelectAll" style="padding: 3px 6px; font-size: 0.7rem;">All</button>
+              <button class="btn btn-secondary" id="btnSelectNone" style="padding: 3px 6px; font-size: 0.7rem;">None</button>
+              <span style="font-size: 0.7rem; color: var(--text-muted); margin-left: 2px;">From</span>
+              <input type="number" id="inputRangeFrom" min="1" placeholder="1" style="width: 45px; padding: 2px 4px; font-size: 0.7rem; text-align: center;">
+              <span style="font-size: 0.7rem; color: var(--text-muted);">To</span>
+              <input type="number" id="inputRangeTo" min="1" placeholder="50" style="width: 45px; padding: 2px 4px; font-size: 0.7rem; text-align: center;">
+              <button class="btn btn-secondary" id="btnApplyRange" style="padding: 3px 6px; font-size: 0.7rem;">Apply</button>
+              <button class="btn btn-success" id="btnQueueAllFiltered" style="margin-left: 6px;">Queue Selected to Dialer</button>
+            </div>
           </div>
 
           <!-- Pending Calls Table -->
@@ -720,6 +732,7 @@
               <thead>
                 <tr>
                   <th style="width: 30px;"><input type="checkbox" id="selectAllCheckbox" checked></th>
+                  <th style="width: 25px; color: var(--text-muted); font-family: var(--mono); font-size: 0.7rem;">#</th>
                   <th>Customer Number</th>
                   <th>Customer Name</th>
                   <th>Marketing Source</th>
@@ -731,7 +744,7 @@
                 </tr>
               </thead>
               <tbody id="pendingTableBody">
-                <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 24px;">Click 'Fetch Calls' to load pending missed calls from CRM...</td></tr>
+                <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 24px;">Click 'Fetch Calls' to load pending missed calls from CRM...</td></tr>
               </tbody>
             </table>
           </div>
@@ -973,15 +986,16 @@
       btnQueueAllFiltered.textContent = `Queue All to Dialer (${filtered.length})`;
 
       if (filtered.length === 0) {
-        pendingTableBody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">No pending calls found for this filter.</td></tr>';
+        pendingTableBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 20px;">No pending calls found for this filter.</td></tr>';
         return;
       }
 
-      pendingTableBody.innerHTML = filtered.map(c => {
+      pendingTableBody.innerHTML = filtered.map((c, idx) => {
         const timeStr = c.createdAt ? new Date(c.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--';
         return `
           <tr data-call-id="${escapeHtml(c.id)}">
             <td><input type="checkbox" class="call-row-check" data-phone="${escapeHtml(c.phone_number)}" data-name="${escapeHtml(c.customer_name)}" data-source="${escapeHtml(c.source)}" checked></td>
+            <td style="font-family: var(--mono); color: var(--text-muted); font-size: 0.7rem;">${idx + 1}</td>
             <td style="font-family: var(--mono); font-weight: 600;">${escapeHtml(c.phone_number)}</td>
             <td>${escapeHtml(c.customer_name || '--')}</td>
             <td>${escapeHtml(c.source || c.campaign || '--')}</td>
@@ -1010,6 +1024,90 @@
     function updateSelectedCount() {
       const selected = document.querySelectorAll('.call-row-check:checked').length;
       btnQueueAllFiltered.textContent = `Queue Selected to Dialer (${selected})`;
+    }
+
+    // Select a slice of leads by 1-based index range [fromVal, toVal]
+    function selectRowRange(fromVal, toVal) {
+      const rows = document.querySelectorAll('.call-row-check');
+      if (rows.length === 0) return;
+
+      let start = parseInt(fromVal, 10);
+      let end = parseInt(toVal, 10);
+
+      if (isNaN(start) && isNaN(end)) {
+        rows.forEach(cb => { cb.checked = false; });
+        selectAllCheckbox.checked = false;
+        updateSelectedCount();
+        return;
+      }
+      if (isNaN(start) || start <= 0) start = 1;
+      if (isNaN(end) || end <= 0) end = rows.length;
+
+      if (start > end) {
+        const temp = start;
+        start = end;
+        end = temp;
+      }
+
+      start = Math.max(1, Math.min(start, rows.length));
+      end = Math.max(start, Math.min(end, rows.length));
+
+      rows.forEach((cb, idx) => {
+        const rowNum = idx + 1;
+        cb.checked = rowNum >= start && rowNum <= end;
+      });
+
+      const checkedCount = document.querySelectorAll('.call-row-check:checked').length;
+      selectAllCheckbox.checked = checkedCount === rows.length && rows.length > 0;
+      updateSelectedCount();
+    }
+
+    const btnSelectTop20 = document.getElementById('btnSelectTop20');
+    if (btnSelectTop20) btnSelectTop20.addEventListener('click', () => {
+      document.getElementById('inputRangeFrom').value = '1';
+      document.getElementById('inputRangeTo').value = '20';
+      selectRowRange(1, 20);
+    });
+    const btnSelectTop50 = document.getElementById('btnSelectTop50');
+    if (btnSelectTop50) btnSelectTop50.addEventListener('click', () => {
+      document.getElementById('inputRangeFrom').value = '1';
+      document.getElementById('inputRangeTo').value = '50';
+      selectRowRange(1, 50);
+    });
+    const btnSelectAll = document.getElementById('btnSelectAll');
+    if (btnSelectAll) btnSelectAll.addEventListener('click', () => {
+      const total = document.querySelectorAll('.call-row-check').length;
+      document.getElementById('inputRangeFrom').value = '1';
+      document.getElementById('inputRangeTo').value = String(total);
+      selectRowRange(1, total);
+    });
+    const btnSelectNone = document.getElementById('btnSelectNone');
+    if (btnSelectNone) btnSelectNone.addEventListener('click', () => {
+      document.getElementById('inputRangeFrom').value = '';
+      document.getElementById('inputRangeTo').value = '';
+      selectRowRange(0, 0);
+    });
+
+    const btnApplyRange = document.getElementById('btnApplyRange');
+    const inputRangeFrom = document.getElementById('inputRangeFrom');
+    const inputRangeTo = document.getElementById('inputRangeTo');
+    if (btnApplyRange && inputRangeFrom && inputRangeTo) {
+      const triggerRange = () => {
+        selectRowRange(inputRangeFrom.value, inputRangeTo.value);
+      };
+      btnApplyRange.addEventListener('click', triggerRange);
+      inputRangeFrom.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          triggerRange();
+        }
+      });
+      inputRangeTo.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          triggerRange();
+        }
+      });
     }
 
     selectAllCheckbox.addEventListener('change', () => {

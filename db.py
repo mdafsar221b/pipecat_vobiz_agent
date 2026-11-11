@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -163,40 +164,113 @@ def resolve_end_of_call_disposition(
 
     # 3. Caller spoke - evaluate conversational evidence
     full_caller = " ".join(t.get("text", "") for t in caller_turns).lower()
+    agent_turns = [t for t in transcripts if t.get("role") == "agent"]
+    full_agent = " ".join(t.get("text", "") for t in agent_turns).lower()
 
-    if any(k in full_caller for k in ["wrong number", "galat number", "wrong call", "tappu number"]):
-        return {"disposition": "wrong_number", "reason": "Caller indicated wrong number"}
+    wrong_num_patterns = [
+        r"\bwrong\s*number\b", r"\bgalat\s*number\b", r"\btappu\s*number\b",
+        r"गलत\s*नंबर", r"తప్పు\s*నంబర్"
+    ]
+    if tracer.disposition == "wrong_number" or any(re.search(p, full_caller) for p in wrong_num_patterns):
+        return {"disposition": "wrong_number", "reason": tracer.reason or "Caller indicated wrong number"}
 
-    if tracer.disposition == "not_interested" or any(k in full_caller for k in ["not interested", "nahi chahiye", "vaddu", "no interest", "don't want", "detail nahi", "nahi share"]):
+    name = tracer.customer_name or (doc.get("customer_name") if doc else None) or (doc.get("metadata", {}).get("customer_name") if doc else None)
+    cb = tracer.callback_time or (doc.get("callback_time") if doc else None)
+
+    # 4. Explicit Rejection by Caller (Word Boundary Checked)
+    decline_regexes = [
+        r"\bnot\s+interested\b",
+        r"\bno\s+interest\b",
+        r"\bdon'?t\s+want\b",
+        r"\bnot\s+required\b",
+        r"\bnahi\s+chahiye\b",
+        r"\bnahi\s+lena\b",
+        r"\bdetail\s+nahi\b",
+        r"\bbaat\s+nahi\s+karni\b",
+        r"\binterest\s+ledu\b",
+        r"\bvaddu\b",
+        r"\boddhu\b",
+        r"వద్దు",
+        r"ఇంట్రెస్ట్\s*లేదు",
+        r"ఆసక్తి\s*లేదు",
+        r"नहीं\s*चाहिए",
+        r"रुचि\s*नहीं",
+        r"इंटरेस्टेड\s*नहीं",
+        r"बात\s*नहीं\s*करनी",
+    ]
+    is_explicit_decline = any(re.search(p, full_caller) for p in decline_regexes)
+
+    if not is_explicit_decline:
+        for t in caller_turns:
+            txt = t.get("text", "").lower().strip()
+            if re.fullmatch(r"(nahi|nahin|nahi ji|no|no thanks|vaddu|oddhu|వద్దు|नहीं|नहीं जी)[\.\?!]*", txt):
+                is_explicit_decline = True
+                break
+            if re.match(r"^(nahi|nahin|nahi ji|no|vaddu|oddhu|వద్దు|नहीं)\b", txt) and not any(w in txt for w in ["kya", "batao", "free", "kyun", "details", "plot"]):
+                is_explicit_decline = True
+                break
+
+    # 5. Confirmed Qualified Lead / Appointment Booking (Precedence #1)
+    if (tracer.disposition == "interested" and not is_explicit_decline) or (name and cb):
+        return {
+            "disposition": "interested",
+            "customer_name": name,
+            "callback_time": cb,
+            "reason": tracer.reason or "Caller confirmed interest and callback details",
+        }
+
+    # 6. Caller proposed callback slot (e.g. "1:00 p.m.", "kal subah")
+    time_match = re.search(
+        r"(\b\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.|a\.m|p\.m)(?=\b|[^\w]|$)|(?:\b\d{1,2}\s*baje\b)|(?:\bkal(?:\s+subah|\s+shaam)?\b)|(?:\brepu\b)|(?:\btomorrow\b))",
+        full_caller,
+    )
+    if time_match and not is_explicit_decline:
+        proposed_time = cb or time_match.group(0).strip()
+        return {
+            "disposition": "interested",
+            "customer_name": name,
+            "callback_time": proposed_time,
+            "reason": tracer.reason if (tracer.disposition == "interested" and tracer.reason) else "Caller proposed callback time before call ended",
+        }
+
+    if tracer.disposition == "not_interested" or is_explicit_decline:
         return {"disposition": "not_interested", "reason": tracer.reason or "Caller declined / not interested"}
 
-    # Check for interest confirmation
-    if tracer.disposition == "interested" or any(k in full_caller for k in ["interested", "haan", "yes", "ha"]):
-        name = tracer.customer_name or (doc.get("customer_name") if doc else None)
-        cb = tracer.callback_time or (doc.get("callback_time") if doc else None)
-        agent_turns = [t for t in transcripts if t.get("role") == "agent"]
-        full_agent = " ".join(t.get("text", "") for t in agent_turns).lower()
-        farewell_delivered = any(w in full_agent for w in ["goodbye", "have a nice day", "shubh ho", "dhanyavad", "bye"])
+    # 6. High-Intent Real Estate Inquiries (Location / Pricing / Venture inquiries)
+    inquiry_patterns = [
+        r"ఎక్కడ\s*ఉంది", r"ఎక్కడ", r"ధర\s*ఎంత", r"ధర", r"రేటు", r"ఎన్ని\s*గజాలు",
+        r"ప్లాట్", r"లొకేషన్", r"ప్రాజెక్ట్", r"వెంచర్",
+        r"\bkahan\s+hai\b", r"\bkidhar\s+hai\b", r"\blocation\b", r"\brate\s+kya\b",
+        r"\bprice\s+kya\b", r"\bkitne\s+ka\b", r"\bcost\b", r"\bwhere\s+is\b",
+        r"\bplot\b", r"\bplots\b", r"\bsq\s*yards?\b", r"\bsquare\s*yards?\b",
+    ]
+    if any(re.search(p, full_caller) for p in inquiry_patterns):
+        return {
+            "disposition": "inquiry_drop",
+            "customer_name": name,
+            "callback_time": cb,
+            "reason": "Caller inquired about location/project details before disconnect (high-priority sales callback)",
+        }
 
-        if name or cb or tracer.disposition == "interested" or farewell_delivered:
-            return {
-                "disposition": "interested",
-                "customer_name": name or (doc.get("metadata", {}).get("customer_name") if doc else None),
-                "callback_time": cb,
-                "reason": tracer.reason or "Caller expressed interest and concluded conversation",
-            }
-        else:
-            return {
-                "disposition": "dropped",
-                "reason": "Caller expressed interest but call dropped before collecting details (high-priority retry)",
-            }
+    # 7. Partial Interest without confirmed booking
+    interest_caller_keywords = [
+        r"\binterested\b", r"\bhaan\b", r"\byes\b", r"\bha\b", r"\bcall\s*back\b",
+        r"\bdetails\b", r"हाँ", r"हां", r"हाँजी", r"हांजी", r"ఇంట్రెస్ట్", r"అవును",
+    ]
+    if any(re.search(p, full_caller) for p in interest_caller_keywords):
+        return {
+            "disposition": "dropped",
+            "customer_name": name,
+            "callback_time": cb,
+            "reason": "Caller expressed interest but call dropped before collecting details (high-priority retry)",
+        }
 
-    if tracer.disposition:
+    if tracer.disposition and tracer.disposition != "not_talking":
         return {"disposition": tracer.disposition, "reason": tracer.reason}
-    if fallback_disposition:
+    if fallback_disposition and fallback_disposition != "not_talking":
         return {"disposition": fallback_disposition, "reason": None}
 
-    return {"disposition": "completed", "reason": "Conversation finished"}
+    return {"disposition": "dropped", "reason": "Conversation disconnected before qualification outcome reached"}
 
 # Finalize call duration, disposition, and diagnostic health
 def finalize_call(
@@ -222,9 +296,10 @@ def finalize_call(
 
             resolved = resolve_end_of_call_disposition(doc, tracer, summary, fallback_disposition)
 
+            default_disp = "dropped" if (doc and doc.get("transcripts")) else "not_talking"
             update_fields: Dict[str, Any] = {
                 "status": status,
-                "disposition": resolved.get("disposition", "not_talking"),
+                "disposition": resolved.get("disposition") or default_disp,
                 "ended_at": now_iso(),
                 "ended_at_epoch": time.time(),
                 "duration_seconds": duration,
@@ -264,12 +339,27 @@ def get_call(call_uuid: str) -> Optional[Dict[str, Any]]:
             logger.error(f"Failed to query call {call_uuid}: {exc}")
     return None
 
-# Retrieve recent call records
-def get_recent_calls(limit: int = 50) -> List[Dict[str, Any]]:
+# Retrieve recent call records with optional date range
+def get_recent_calls(
+    limit: int = 500,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     col = get_collection()
     if col is not None:
         try:
-            cursor = col.find({}, {"_id": 0}).sort("created_at", DESCENDING).limit(limit)
+            query: Dict[str, Any] = {}
+            if start_date and end_date:
+                query["created_at"] = {
+                    "$gte": f"{start_date}T00:00:00",
+                    "$lte": f"{end_date}T23:59:59.999999",
+                }
+            elif start_date:
+                query["created_at"] = {"$gte": f"{start_date}T00:00:00"}
+            elif end_date:
+                query["created_at"] = {"$lte": f"{end_date}T23:59:59.999999"}
+
+            cursor = col.find(query, {"_id": 0}).sort("created_at", DESCENDING).limit(limit)
             calls = list(cursor)
             for c in calls:
                 c["turns"] = c.get("transcripts", [])
@@ -330,7 +420,7 @@ def get_batch_metrics(batch_id: str) -> Dict[str, int]:
                     metrics["not_interested"] += 1
                 elif disp == "wrong_number":
                     metrics["wrong_number"] += 1
-                elif disp in ("dropped", "system_error"):
+                elif disp in ("dropped", "system_error", "inquiry_drop"):
                     metrics["dropped"] += 1
                 elif disp == "not_talking":
                     metrics["not_talking"] += 1
@@ -395,3 +485,42 @@ def delete_batch(batch_id: str) -> bool:
         except Exception as exc:
             logger.error(f"Failed to delete batch {batch_id}: {exc}")
     return False
+
+# Map normalized 10-digit phone to latest AI voice agent call
+def get_latest_ai_call_by_phone() -> Dict[str, Dict[str, Any]]:
+    col = get_collection()
+    if col is None:
+        return {}
+    try:
+        import re
+        cursor = col.find(
+            {},
+            {
+                "_id": 0,
+                "phone_number": 1,
+                "disposition": 1,
+                "call_uuid": 1,
+                "created_at": 1,
+                "duration_seconds": 1,
+                "status": 1,
+            }
+        ).sort("created_at", DESCENDING)
+
+        dispo_map: Dict[str, Dict[str, Any]] = {}
+        for doc in cursor:
+            raw = doc.get("phone_number")
+            if not raw:
+                continue
+            digits = re.sub(r"\D", "", str(raw))[-10:]
+            if digits and digits not in dispo_map:
+                dispo_map[digits] = {
+                    "disposition": doc.get("disposition") or "completed",
+                    "call_uuid": doc.get("call_uuid"),
+                    "created_at": doc.get("created_at"),
+                    "duration": doc.get("duration_seconds", 0) or 0,
+                    "status": doc.get("status"),
+                }
+        return dispo_map
+    except Exception as exc:
+        logger.error(f"Failed to query latest AI calls: {exc}")
+        return {}

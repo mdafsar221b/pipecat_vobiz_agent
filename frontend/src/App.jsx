@@ -27,6 +27,7 @@ export default function App() {
   const [manualDialStatus, setManualDialStatus] = useState('');
   const [manualDialFeedback, setManualDialFeedback] = useState('');
   const [isDialingManual, setIsDialingManual] = useState(false);
+  const isDialingRef = useRef(false);
 
   // Tabs Data State
   const [crmCalls, setCrmCalls] = useState([]);
@@ -41,11 +42,14 @@ export default function App() {
 
   const wasCallActiveRef = useRef(false);
 
-  // Fetch Completed Call Logs
-  const fetchCompletedLogs = useCallback(async () => {
+  // Fetch Completed Call Logs with optional date range
+  const fetchCompletedLogs = useCallback(async (startDate, endDate) => {
     setIsLoadingLogs(true);
     try {
-      const res = await fetch('/calls?limit=50');
+      let url = '/calls?limit=500';
+      if (startDate) url += `&start_date=${encodeURIComponent(startDate)}`;
+      if (endDate) url += `&end_date=${encodeURIComponent(endDate)}`;
+      const res = await fetch(url);
       if (!res.ok) return;
       const list = await res.json();
       setCompletedCalls(list || []);
@@ -220,8 +224,12 @@ export default function App() {
   };
 
   const handleTriggerManualDial = async (phone, contactName = '') => {
-    if (!phone) return;
+    if (!phone || isDialingRef.current || isDialingManual || (campaignData.active_calls && campaignData.active_calls.length > 0)) {
+      return;
+    }
+    isDialingRef.current = true;
     setIsDialingManual(true);
+    setAlertMessage('');
     setManualPhone(phone);
     setManualDialStatus('DIALING');
     setManualDialFeedback(`Call dispatched to ${phone}. Waiting for answer...`);
@@ -249,7 +257,6 @@ export default function App() {
         setAlertMessage(errMsg);
         setManualDialFeedback(`Error: ${errMsg}`);
         setManualDialStatus('FAILED');
-        setIsDialingManual(false);
       } else {
         setAlertMessage('');
         fetchCampaignStatus();
@@ -258,7 +265,9 @@ export default function App() {
       setAlertMessage(err.message);
       setManualDialFeedback(`Network error: ${err.message}`);
       setManualDialStatus('FAILED');
+    } finally {
       setIsDialingManual(false);
+      isDialingRef.current = false;
     }
   };
 
@@ -370,6 +379,7 @@ export default function App() {
               onQueueLeads={handleQueueLeads}
               onTriggerManualDial={handleTriggerManualDial}
               isDialingManual={isDialingManual}
+              completedCalls={completedCalls}
             />
           </div>
         )}
@@ -382,6 +392,7 @@ export default function App() {
               isLoadingBatches={isLoadingBatches}
               onRefreshBatches={fetchBatches}
               onRefreshCampaign={fetchCampaignStatus}
+              onQueueLeads={handleQueueLeads}
             />
           </div>
         )}
@@ -393,6 +404,7 @@ export default function App() {
               completedCalls={completedCalls}
               isLoadingLogs={isLoadingLogs}
               onRefreshLogs={fetchCompletedLogs}
+              onQueueLeads={handleQueueLeads}
             />
           </div>
         )}

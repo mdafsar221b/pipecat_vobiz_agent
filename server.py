@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 from html import escape
@@ -134,7 +135,7 @@ async def answer_call(request: Request):
     logger.info(f"[TIMING] [{call_short}] 1. Call answered at {t_answer:.3f} ({datetime.now().strftime('%H:%M:%S.%f')[:-3]})")
     logger.info(f"Vobiz Answer Callback: call_uuid={call_uuid}, to={to_number}, from={from_number}")
     batch_id = params.get("batch_id") or (dialer.active_call.get("batch_id") if dialer.active_call else None) or dialer.current_batch_id
-    db.record_call_start(call_uuid, phone_number=to_number, batch_id=batch_id, metadata=params)
+    asyncio.create_task(asyncio.to_thread(db.record_call_start, call_uuid, phone_number=to_number, batch_id=batch_id, metadata=params))
     dialer.set_call_status(call_uuid, "in_call")
     tracer = diagnostics.get_tracer(call_uuid, phone_number=to_number, batch_id=batch_id)
     tracer.t_answer = t_answer
@@ -147,6 +148,7 @@ async def answer_call(request: Request):
 
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+    <Record recordSession="true" playBeep="false" maxLength="3600" redirect="false" callbackUrl="{rec_callback}" callbackMethod="POST"/>
     <Stream bidirectional="true"
             audioTrack="inbound"
             keepCallAlive="true"
@@ -155,7 +157,6 @@ async def answer_call(request: Request):
             statusCallbackMethod="POST">
         {ws_stream_url}
     </Stream>
-    <Record recordSession="true" playBeep="false" maxLength="3600" redirect="false" callbackUrl="{rec_callback}" callbackMethod="POST"/>
     <Hangup/>
 </Response>"""
     return Response(content=xml_content, media_type="application/xml")
@@ -244,6 +245,8 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         dialer.on_call_ended(call_uuid)
 
+dial_lock = asyncio.Lock()
+
 # Trigger single test dial (compatible with UI dial button)
 @app.post("/api/dial")
 @app.post("/outbound")
@@ -253,33 +256,41 @@ async def trigger_dial(request: Request):
     if not to_number:
         return JSONResponse(status_code=400, content={"ok": False, "error": "Missing phone number"})
 
-    public_url = get_public_url()
-    answer_url = f"{public_url}/answer"
-    hangup_url = f"{public_url}/hangup"
-    from_number = payload.get("from")
+    async with dial_lock:
+        if dialer.active_call:
+            active_num = dialer.active_call.get("phone_number", "another recipient")
+            return JSONResponse(
+                status_code=409,
+                content={"ok": False, "error": f"Line busy: A call is currently active with {active_num}. Please wait for it to finish."}
+            )
 
-    try:
-        result = await vobiz_api.place_call(
-            to_number=to_number,
-            answer_url=answer_url,
-            hangup_url=hangup_url,
-            from_number=from_number,
-        )
-        call_uuid = result.get("request_uuid") or result.get("call_uuid") or ""
-        dialer.set_active_call(
-            call_uuid=call_uuid,
-            phone_number=to_number,
-            customer_name=payload.get("customer_name", ""),
-            status="dialing",
-        )
-        db.record_call_start(
-            call_uuid=call_uuid,
-            phone_number=to_number,
-            metadata={"customer_name": payload.get("customer_name", ""), "status": "dialing"},
-        )
-        return {"ok": True, "status": "call_initiated", "call_uuid": call_uuid, "vobiz_response": result}
-    except Exception as exc:
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+        public_url = get_public_url()
+        answer_url = f"{public_url}/answer"
+        hangup_url = f"{public_url}/hangup"
+        from_number = payload.get("from")
+
+        try:
+            result = await vobiz_api.place_call(
+                to_number=to_number,
+                answer_url=answer_url,
+                hangup_url=hangup_url,
+                from_number=from_number,
+            )
+            call_uuid = result.get("request_uuid") or result.get("call_uuid") or ""
+            dialer.set_active_call(
+                call_uuid=call_uuid,
+                phone_number=to_number,
+                customer_name=payload.get("customer_name", ""),
+                status="dialing",
+            )
+            db.record_call_start(
+                call_uuid=call_uuid,
+                phone_number=to_number,
+                metadata={"customer_name": payload.get("customer_name", ""), "status": "dialing"},
+            )
+            return {"ok": True, "status": "call_initiated", "call_uuid": call_uuid, "vobiz_response": result}
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 # Retrieve dialer and campaign status for UI HUD
 @app.get("/api/campaign/status")
@@ -363,19 +374,20 @@ async def get_recording(call_uuid: str):
     doc = db.get_call(call_uuid)
     rec_url = doc.get("recording_url") if doc else None
 
-    # Fallback: query Vobiz Recording API directly if not yet saved in database
+    # Fallback: query Vobiz Recording API if not saved in database
     if not rec_url:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.get(
-                    f"{vobiz_api.API_BASE}/Account/{vobiz_api.AUTH_ID}/Recording/?call_uuid={call_uuid}",
-                    headers=vobiz_api.get_headers(),
-                )
+                api_url = f"{vobiz_api.API_BASE}/Account/{vobiz_api.AUTH_ID}/Recording/?call_uuid={call_uuid}"
+                r = await client.get(api_url, headers=vobiz_api.get_headers())
+                logger.info(f"Vobiz Recording API response for {call_uuid}: status={r.status_code}, body={r.text[:500]}")
                 if r.status_code == 200:
-                    objs = r.json().get("objects", [])
+                    data = r.json()
+                    objs = data.get("objects", [])
                     if objs:
-                        rec_url = objs[0].get("recording_url")
-                        db.update_call(call_uuid, {"recording_url": rec_url})
+                        rec_url = objs[0].get("recording_url") or objs[0].get("url")
+                        if rec_url:
+                            db.update_call(call_uuid, {"recording_url": rec_url})
         except Exception as exc:
             logger.warning(f"Error querying Vobiz recording API for {call_uuid}: {exc}")
 
@@ -383,8 +395,11 @@ async def get_recording(call_uuid: str):
         return Response(content="No recording available for this call", status_code=404)
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             resp = await client.get(rec_url, headers=vobiz_api.get_headers())
+            if resp.status_code != 200:
+                logger.warning(f"Recording fetch returned {resp.status_code} for {rec_url}")
+                return Response(content="Recording not available from provider", status_code=502)
             return Response(
                 content=resp.content,
                 media_type=resp.headers.get("content-type", "audio/mpeg"),
@@ -394,10 +409,14 @@ async def get_recording(call_uuid: str):
         logger.error(f"Failed to fetch recording {rec_url}: {exc}")
         return Response(content="Failed to retrieve recording", status_code=502)
 
-# Retrieve recent call history and transcripts
+# Retrieve recent call history and transcripts with optional date range
 @app.get("/calls")
-async def list_calls(limit: int = 50):
-    return db.get_recent_calls(limit=limit)
+async def list_calls(
+    limit: int = 500,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
+    return db.get_recent_calls(limit=limit, start_date=start_date, end_date=end_date)
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=PORT, reload=True)

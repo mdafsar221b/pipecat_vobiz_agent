@@ -16,6 +16,7 @@ import {
   X,
   RotateCcw,
   ArrowRight,
+  Download,
 } from 'lucide-react';
 import {
   formatBytes,
@@ -31,6 +32,7 @@ export default function BatchesTab({
   isLoadingBatches = false,
   onRefreshBatches,
   onRefreshCampaign,
+  onQueueLeads,
 }) {
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [batchDetail, setBatchDetail] = useState(null);
@@ -41,6 +43,10 @@ export default function BatchesTab({
   // Batch Detail Filters
   const [batchKpiFilter, setBatchKpiFilter] = useState('all');
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
+
+  // Batch Detail Selection State
+  const [selectedBatchUuids, setSelectedBatchUuids] = useState(new Set());
+  const [isQueueingBatchCalls, setIsQueueingBatchCalls] = useState(false);
 
   const toggleTranscript = (callUuid) => {
     setOpenTranscriptId((prev) => (prev === callUuid ? null : callUuid));
@@ -175,6 +181,78 @@ export default function BatchesTab({
           return 'Dropped';
         default:
           return 'All Calls';
+      }
+    };
+
+    const selectedBatchCalls = calls.filter((c) => selectedBatchUuids.has(c.call_uuid));
+    const allBatchSelected =
+      filteredBatchCalls.length > 0 &&
+      filteredBatchCalls.every((c) => selectedBatchUuids.has(c.call_uuid));
+
+    const toggleSelectBatchCall = (uuid) => {
+      setSelectedBatchUuids((prev) => {
+        const next = new Set(prev);
+        if (next.has(uuid)) {
+          next.delete(uuid);
+        } else {
+          next.add(uuid);
+        }
+        return next;
+      });
+    };
+
+    const toggleSelectAllBatchCalls = () => {
+      if (allBatchSelected) {
+        setSelectedBatchUuids(new Set());
+      } else {
+        setSelectedBatchUuids(new Set(filteredBatchCalls.map((c) => c.call_uuid)));
+      }
+    };
+
+    const handleQueueSelectedBatchCalls = async () => {
+      if (selectedBatchCalls.length === 0) return;
+      setIsQueueingBatchCalls(true);
+      try {
+        const leads = selectedBatchCalls
+          .map((c) => {
+            const num = c.phone_number || (c.events || []).find((e) => e.to || e.params?.To)?.to || '';
+            const name = c.customer_name || c.contact_name || '';
+            const disp = c.disposition || 'retry';
+            return {
+              phone_number: num,
+              customer_name: name,
+              source: `Batch Retry (${b.name || b.batch_id || 'Batch'})`,
+              metadata: {
+                batch_origin: b.batch_id,
+                original_uuid: c.call_uuid,
+                prev_disposition: disp,
+              },
+            };
+          })
+          .filter((l) => Boolean(l.phone_number));
+
+        if (leads.length === 0) {
+          alert('No valid phone numbers found in selected calls.');
+          return;
+        }
+
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const batchName = `Batch Retry (${b.name || b.batch_id || 'Batch'}) - ${leads.length} calls (${timeStr})`;
+        const sourceFilter = `Batch ${b.batch_id} Retry`;
+
+        if (onQueueLeads) {
+          await onQueueLeads({
+            leads,
+            batch_name: batchName,
+            source_filter: sourceFilter,
+          });
+          setSelectedBatchUuids(new Set());
+        }
+      } catch (err) {
+        alert(`Failed to queue leads: ${err.message}`);
+      } finally {
+        setIsQueueingBatchCalls(false);
       }
     };
 
@@ -440,7 +518,7 @@ export default function BatchesTab({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs">
+          <div className="flex items-center gap-2 text-xs flex-wrap">
             {batchKpiFilter !== 'all' && (
               <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#008792]/10 text-[#008792] font-semibold border border-[#008792]/20">
                 <span>Filter: {getFilterLabel(batchKpiFilter)}</span>
@@ -456,6 +534,19 @@ export default function BatchesTab({
             <span className="font-mono text-xs font-semibold text-slate-600">
               Showing {filteredBatchCalls.length} of {calls.length} calls
             </span>
+
+            <button
+              onClick={handleQueueSelectedBatchCalls}
+              disabled={isQueueingBatchCalls || selectedBatchCalls.length === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white transition disabled:opacity-40 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>
+                {isQueueingBatchCalls
+                  ? 'Queueing...'
+                  : `Queue Selected to Dialer (${selectedBatchCalls.length})`}
+              </span>
+            </button>
           </div>
         </div>
 
@@ -464,6 +555,14 @@ export default function BatchesTab({
           <table className="w-full border-collapse text-left text-xs">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px] sticky top-0 z-10 backdrop-blur-sm">
+                <th className="w-10 px-3.5 py-3">
+                  <input
+                    type="checkbox"
+                    checked={allBatchSelected}
+                    onChange={toggleSelectAllBatchCalls}
+                    className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
+                  />
+                </th>
                 <th className="px-3.5 py-3 whitespace-nowrap">Recipient</th>
                 <th className="px-3.5 py-3 whitespace-nowrap">Disposition</th>
                 <th className="px-3.5 py-3 whitespace-nowrap">Stream Health</th>
@@ -477,14 +576,14 @@ export default function BatchesTab({
             <tbody className="divide-y divide-slate-200">
               {isLoadingDetail ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12 text-slate-400">
+                  <td colSpan={9} className="text-center py-12 text-slate-400">
                     <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
                     <span className="text-xs font-medium">Fetching call audio telemetry and transcripts...</span>
                   </td>
                 </tr>
               ) : filteredBatchCalls.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12 bg-slate-50/50">
+                  <td colSpan={9} className="text-center py-12 bg-slate-50/50">
                     <p className="font-semibold text-slate-700">No calls match the selected KPI filter</p>
                     <p className="text-[11px] text-slate-400 mt-1">
                       Click 'Show All' above or click the Total card to view all {calls.length} calls in this batch.
@@ -521,10 +620,21 @@ export default function BatchesTab({
                   const isTimelineOpen = openTimelineId === entry.call_uuid;
                   const turnsCount = (entry.turns || []).length;
                   const eventsCount = (entry.events || []).length;
+                  const isChecked = selectedBatchUuids.has(entry.call_uuid);
 
                   return (
                     <React.Fragment key={entry.call_uuid}>
-                      <tr className={`hover:bg-slate-50/80 transition-colors ${isTranscriptOpen || isTimelineOpen ? 'bg-slate-50/50' : ''}`}>
+                      <tr className={`hover:bg-slate-50/80 transition-colors ${isChecked ? 'bg-[#008792]/5' : isTranscriptOpen || isTimelineOpen ? 'bg-slate-50/50' : ''}`}>
+                        {/* Checkbox */}
+                        <td className="px-3.5 py-3">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleSelectBatchCall(entry.call_uuid)}
+                            className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
+                          />
+                        </td>
+
                         {/* Recipient */}
                         <td className="px-3.5 py-3 whitespace-nowrap">
                           <div className="flex items-center gap-2">
@@ -642,7 +752,7 @@ export default function BatchesTab({
                       {/* Expandable Accordion Row */}
                       {(isTranscriptOpen || isTimelineOpen) && (
                         <tr className="bg-slate-50/70 border-b border-slate-200">
-                          <td colSpan={8} className="p-3.5">
+                          <td colSpan={9} className="p-3.5">
                             {isTranscriptOpen && (
                               <div className="bg-white border border-slate-200 p-3 space-y-2 mb-2.5">
                                 <div className="flex items-center justify-between pb-2 border-b border-slate-100 text-xs">
