@@ -589,53 +589,101 @@ def fetch_crm_missed_calls(
             if len(digits) == 10:
                 all_numbers_10.add(digits)
 
-        # Check which numbers received answered callbacks
-        num_list = list(all_numbers_10)
-        variants = []
-        for n in num_list:
-            variants.extend([n, f"+91{n}", f"91{n}", f"0{n}"])
+        number_variants = list(all_numbers_10)
+        for n in list(all_numbers_10):
+            number_variants.extend([f"+91{n}", f"91{n}", f"0{n}"])
 
-        called_set = set()
-        if variants:
-            out_col = db_inst["hook_v2_outbound_hangup_answered"]
-            answered_out = out_col.find(
-                {
-                    "$or": [
-                        {"call_to_number": {"$in": variants}},
-                        {"customer_no_with_prefix ": {"$in": variants}},
-                        {"broadcast_lead_fields.Phone_Number": {"$in": variants}}
-                    ]
-                },
-                {"call_to_number": 1, "customer_no_with_prefix ": 1, "_id": 0}
-            )
-            for o in answered_out:
-                for f in ("call_to_number", "customer_no_with_prefix "):
-                    val = o.get(f)
-                    if val:
-                        d10 = re.sub(r"\D", "", str(val))[-10:]
-                        if d10 in all_numbers_10:
-                            called_set.add(d10)
+        outbound_map: Dict[str, List[Dict[str, Any]]] = {}
 
-            in_col = db_inst["hook_v2_inbound_hangup_answered"]
-            answered_in = in_col.find(
-                {"caller_id_number": {"$in": variants}},
-                {"caller_id_number": 1, "_id": 0}
-            )
-            for i in answered_in:
-                val = i.get("caller_id_number")
-                if val:
-                    d10 = re.sub(r"\D", "", str(val))[-10:]
-                    if d10 in all_numbers_10:
-                        called_set.add(d10)
+        if number_variants:
+            outbound_filter = {
+                "createdAt": {"$gte": start_utc},
+                "$or": [
+                    {"call_to_number": {"$in": number_variants}},
+                    {"broadcast_lead_fields.Phone_Number": {"$in": number_variants}},
+                    {"customer_no_with_prefix": {"$in": number_variants}},
+                    {"customer_no_with_prefix ": {"$in": number_variants}},
+                ]
+            }
+
+            inbound_filter = {
+                "createdAt": {"$gte": start_utc},
+                "$or": [
+                    {"caller_id_number": {"$in": number_variants}},
+                    {"call_from_number": {"$in": number_variants}},
+                    {"broadcast_lead_fields.Phone_Number": {"$in": number_variants}},
+                    {"customer_no_with_prefix": {"$in": number_variants}},
+                ]
+            }
+
+            fields = {
+                "call_to_number": 1,
+                "caller_id_number": 1,
+                "call_from_number": 1,
+                "broadcast_lead_fields.Phone_Number": 1,
+                "customer_no_with_prefix": 1,
+                "customer_no_with_prefix ": 1,
+                "isAnswered": 1,
+                "call_status": 1,
+                "call_connected": 1,
+                "createdAt": 1,
+                "start_stamp": 1,
+            }
+
+            answered_docs = list(db_inst["hook_v2_outbound_hangup_answered"].find(outbound_filter, fields))
+            missed_docs = list(db_inst["hook_v2_outbound_hangup_missed"].find(outbound_filter, fields))
+            in_answered_docs = list(db_inst["hook_v2_inbound_hangup_answered"].find(inbound_filter, fields))
+
+            all_outbounds = []
+            for d in answered_docs:
+                ext = d.get("call_to_number") or (d.get("broadcast_lead_fields") or {}).get("Phone_Number") or d.get("customer_no_with_prefix") or d.get("customer_no_with_prefix ")
+                all_outbounds.append({"ext": ext, "is_ans": True, "doc": d})
+            for d in missed_docs:
+                ext = d.get("call_to_number") or (d.get("broadcast_lead_fields") or {}).get("Phone_Number") or d.get("customer_no_with_prefix") or d.get("customer_no_with_prefix ")
+                all_outbounds.append({"ext": ext, "is_ans": False, "doc": d})
+            for d in in_answered_docs:
+                ext = d.get("caller_id_number") or d.get("call_from_number") or d.get("customer_no_with_prefix")
+                all_outbounds.append({"ext": ext, "is_ans": True, "doc": d})
+
+            for item in all_outbounds:
+                raw = item["ext"] or ""
+                clean_num = re.sub(r"\D", "", str(raw))[-10:]
+                if clean_num:
+                    outbound_map.setdefault(clean_num, []).append(item)
 
         results = []
         for c in missed_calls:
             num = c.get("caller_id_number") or ""
             d10 = re.sub(r"\D", "", str(num))[-10:]
-            is_pending = d10 not in called_set
+            cust_outbounds = outbound_map.get(d10, [])
+            missed_time = c.get("createdAt")
 
-            status = "pending" if is_pending else "called"
-            if status_filter == "pending" and not is_pending:
+            # Match callbacks made on or after the missed call (-5s tolerance) exactly like Corely CRM
+            post_callbacks = []
+            if missed_time:
+                for o in cust_outbounds:
+                    o_time = o["doc"].get("createdAt")
+                    if o_time and o_time >= (missed_time - timedelta(seconds=5)):
+                        post_callbacks.append(o)
+            else:
+                post_callbacks = cust_outbounds
+
+            ans_cb = next(
+                (o for o in post_callbacks if o["is_ans"] or o["doc"].get("call_status") == "answered" or str(o["doc"].get("call_connected")) == "1"),
+                None
+            )
+            cb_doc = ans_cb or (post_callbacks[-1] if post_callbacks else None)
+
+            status = "pending"
+            if cb_doc:
+                is_conn = cb_doc["is_ans"] or cb_doc["doc"].get("call_status") == "answered" or str(cb_doc["doc"].get("call_connected")) == "1"
+                status = "called" if is_conn else "attempted"
+
+            if status_filter == "pending" and status != "pending":
+                continue
+            if status_filter == "called" and status != "called":
+                continue
+            if status_filter == "attempted" and status != "attempted":
                 continue
 
             # Resolve agents

@@ -101,10 +101,12 @@ export default function PendingCallsTab({
       not_talking: 0,
       dropped: 0,
       crmPending: 0,
+      crmAttempted: 0,
       crmCalled: 0,
     };
     for (const c of sourceCalls) {
       if (c.status === 'called') counts.crmCalled++;
+      else if (c.status === 'attempted') counts.crmAttempted++;
       else counts.crmPending++;
 
       const info = getAiCallInfo(c);
@@ -494,6 +496,20 @@ export default function PendingCallsTab({
               CRM Pending ({dispoCounts.crmPending || 0})
             </button>
 
+            {/* Quick Filter: CRM Attempted Callbacks */}
+            {dispoCounts.crmAttempted > 0 && (
+              <button
+                onClick={() => setCrmFilter(crmFilter === 'attempted' ? 'all' : 'attempted')}
+                className={`px-2.5 py-1 text-xs font-semibold transition border ${
+                  crmFilter === 'attempted'
+                    ? 'bg-amber-600 text-white border-amber-600'
+                    : 'bg-white text-amber-700 hover:bg-amber-50 border-amber-300'
+                }`}
+              >
+                Attempted ({dispoCounts.crmAttempted || 0})
+              </button>
+            )}
+
             {(aiFilter !== 'all' || crmFilter !== 'all') && (
               <button
                 onClick={() => {
@@ -729,10 +745,12 @@ export default function PendingCallsTab({
                         className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 border ${
                           c.status === 'called'
                             ? 'bg-slate-100 text-slate-600 border-slate-200'
+                            : c.status === 'attempted'
+                            ? 'bg-amber-50 text-amber-700 border-amber-200'
                             : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                         }`}
                       >
-                        {c.status === 'called' ? 'Called' : 'Pending'}
+                        {c.status === 'called' ? 'Called' : c.status === 'attempted' ? 'Attempted' : 'Pending'}
                       </span>
                     </td>
                     <td className="px-3.5 py-3 whitespace-nowrap">
