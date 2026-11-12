@@ -17,11 +17,15 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "rag-bot_test")
 MONGO_COLLECTION_NAME = os.getenv("MONGO_COLLECTION_NAME", "vobiz_ai_calls")
 MONGO_BATCHES_COLLECTION_NAME = os.getenv("MONGO_BATCHES_COLLECTION_NAME", "campaign_batches")
+REAL_MONGO_URI = os.getenv("REAL_MONGO_URI", "")
+REAL_MONGO_DB_NAME = os.getenv("REAL_MONGO_DB_NAME", "realestate_db")
 
 _client: Optional[MongoClient] = None
 _db: Optional[Database] = None
 _collection: Optional[Collection] = None
 _batches_col: Optional[Collection] = None
+_crm_client: Optional[MongoClient] = None
+_crm_db: Optional[Database] = None
 
 # Initialize MongoDB client and ensure collection indexes
 def get_collection() -> Optional[Collection]:
@@ -537,13 +541,29 @@ def get_latest_ai_call_by_phone() -> Dict[str, Dict[str, Any]]:
         logger.error(f"Failed to query latest AI calls: {exc}")
         return {}
 
+# Initialize CRM database connection for live missed calls
+def get_crm_db() -> Optional[Database]:
+    global _crm_client, _crm_db
+    if _crm_db is not None:
+        return _crm_db
+    uri = REAL_MONGO_URI or MONGO_URI
+    db_name = REAL_MONGO_DB_NAME or "realestate_db"
+    try:
+        _crm_client = MongoClient(uri, serverSelectionTimeoutMS=8000)
+        _crm_db = _crm_client[db_name]
+        return _crm_db
+    except Exception as exc:
+        logger.error(f"CRM DB connection failed: {exc}")
+        return get_db()
+
+
 # Query inbound missed calls directly from realestate_db collections (pure Python, cross-platform)
 def fetch_crm_missed_calls(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     status_filter: Optional[str] = "all",
 ) -> List[Dict[str, Any]]:
-    db_inst = get_db()
+    db_inst = get_crm_db()
     if db_inst is None:
         return []
     try:
