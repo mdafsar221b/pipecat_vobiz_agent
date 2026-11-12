@@ -27,13 +27,45 @@ class OutboundDialer:
         self.current_batch_id: Optional[str] = None
         self.total_batch_leads: int = 0
 
-    # Fetch pending calls from CRM using the node service
+    # Enrich each CRM lead with latest AI voice agent disposition
+    def _enrich_with_ai_disposition(self, calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        try:
+            import re
+            ai_map = db.get_latest_ai_call_by_phone()
+            for c in calls:
+                num = c.get("phone_number") or ""
+                digits = re.sub(r"\D", "", str(num))[-10:]
+                if digits and digits in ai_map:
+                    ai_info = ai_map[digits]
+                    c["ai_disposition"] = ai_info.get("disposition")
+                    c["ai_call_uuid"] = ai_info.get("call_uuid")
+                    c["ai_call_time"] = ai_info.get("created_at")
+                    c["ai_duration"] = ai_info.get("duration", 0)
+                else:
+                    c["ai_disposition"] = None
+                    c["ai_call_uuid"] = None
+                    c["ai_call_time"] = None
+                    c["ai_duration"] = 0
+        except Exception as enrich_err:
+            logger.warning(f"Failed to enrich CRM leads with AI disposition: {enrich_err}")
+        return calls
+
+    # Fetch pending calls from CRM (direct MongoDB primary, node service fallback)
     def fetch_crm_pending(
         self,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         status: Optional[str] = "all",
     ) -> List[Dict[str, Any]]:
+        # 1. Primary: Direct native MongoDB query (works standalone on Linux VPS, Docker, Windows)
+        try:
+            native_calls = db.fetch_crm_missed_calls(start_date, end_date, status)
+            if native_calls:
+                return self._enrich_with_ai_disposition(native_calls)
+        except Exception as exc:
+            logger.warning(f"Native MongoDB CRM fetch failed: {exc}")
+
+        # 2. Fallback: Node crm_service.cjs (if local realestate workflow exists)
         script_path = BASE_DIR / "crm_service.cjs"
         cmd = ["node", str(script_path), start_date or "", end_date or "", status or "all"]
         try:
@@ -41,28 +73,8 @@ class OutboundDialer:
             if res.returncode == 0 and res.stdout.strip():
                 data = json.loads(res.stdout.strip())
                 calls = data.get("calls", []) if isinstance(data, dict) else data
-                # Enrich each CRM lead with latest AI voice agent disposition
-                try:
-                    import re
-                    ai_map = db.get_latest_ai_call_by_phone()
-                    for c in calls:
-                        num = c.get("phone_number") or ""
-                        digits = re.sub(r"\D", "", str(num))[-10:]
-                        if digits and digits in ai_map:
-                            ai_info = ai_map[digits]
-                            c["ai_disposition"] = ai_info.get("disposition")
-                            c["ai_call_uuid"] = ai_info.get("call_uuid")
-                            c["ai_call_time"] = ai_info.get("created_at")
-                            c["ai_duration"] = ai_info.get("duration", 0)
-                        else:
-                            c["ai_disposition"] = None
-                            c["ai_call_uuid"] = None
-                            c["ai_call_time"] = None
-                            c["ai_duration"] = 0
-                except Exception as enrich_err:
-                    logger.warning(f"Failed to enrich CRM leads with AI disposition: {enrich_err}")
-                return calls
-            logger.warning(f"CRM fetch non-zero exit: {res.stderr}")
+                return self._enrich_with_ai_disposition(calls)
+            logger.warning(f"CRM fetch non-zero exit ({res.returncode}): {res.stderr}")
         except Exception as exc:
             logger.error(f"CRM pending fetch failed: {exc}")
         return []

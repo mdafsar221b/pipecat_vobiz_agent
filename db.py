@@ -1,7 +1,7 @@
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
@@ -40,6 +40,14 @@ def get_collection() -> Optional[Collection]:
     except Exception as exc:
         logger.error(f"MongoDB connection failed: {exc}")
         return None
+
+# Retrieve MongoDB database instance
+def get_db() -> Optional[Database]:
+    global _client, _db
+    if _db is not None:
+        return _db
+    get_collection()
+    return _db
 
 # Initialize campaign batches collection
 def get_batches_collection() -> Optional[Collection]:
@@ -524,3 +532,157 @@ def get_latest_ai_call_by_phone() -> Dict[str, Dict[str, Any]]:
     except Exception as exc:
         logger.error(f"Failed to query latest AI calls: {exc}")
         return {}
+
+# Query inbound missed calls directly from realestate_db collections (pure Python, cross-platform)
+def fetch_crm_missed_calls(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    status_filter: Optional[str] = "all",
+) -> List[Dict[str, Any]]:
+    db_inst = get_db()
+    if db_inst is None:
+        return []
+    try:
+        ist_offset = timedelta(hours=5, minutes=30)
+        now_utc = datetime.now(timezone.utc)
+        now_ist = now_utc + ist_offset
+
+        if not start_date:
+            start_utc = now_ist.replace(hour=0, minute=0, second=0, microsecond=0) - ist_offset
+            end_utc = now_ist.replace(hour=23, minute=59, second=59, microsecond=999999) - ist_offset
+        else:
+            sp = [int(p) for p in start_date.split("-")]
+            start_utc = datetime(sp[0], sp[1], sp[2], 0, 0, 0) - ist_offset
+            if end_date:
+                ep = [int(p) for p in end_date.split("-")]
+                end_utc = datetime(ep[0], ep[1], ep[2], 23, 59, 59, 999999) - ist_offset
+            else:
+                end_utc = datetime(sp[0], sp[1], sp[2], 23, 59, 59, 999999) - ist_offset
+
+        match_stage = {"createdAt": {"$gte": start_utc, "$lte": end_utc}}
+
+        pipeline = [
+            {"$match": match_stage},
+            {"$sort": {"createdAt": -1}},
+            {
+                "$group": {
+                    "_id": "$call_id",
+                    "doc": {"$first": "$$ROOT"}
+                }
+            },
+            {"$replaceRoot": {"newRoot": "$doc"}},
+            {"$sort": {"createdAt": -1}}
+        ]
+
+        missed_col = db_inst["hook_v2_inbound_hangup_missed"]
+        missed_calls = list(missed_col.aggregate(pipeline))
+
+        # Collect 10-digit customer phone numbers
+        all_numbers_10 = set()
+        for c in missed_calls:
+            num = c.get("caller_id_number") or ""
+            digits = re.sub(r"\D", "", str(num))[-10:]
+            if len(digits) == 10:
+                all_numbers_10.add(digits)
+
+        # Check which numbers received answered callbacks
+        num_list = list(all_numbers_10)
+        variants = []
+        for n in num_list:
+            variants.extend([n, f"+91{n}", f"91{n}", f"0{n}"])
+
+        called_set = set()
+        if variants:
+            out_col = db_inst["hook_v2_outbound_hangup_answered"]
+            answered_out = out_col.find(
+                {
+                    "$or": [
+                        {"call_to_number": {"$in": variants}},
+                        {"customer_no_with_prefix ": {"$in": variants}},
+                        {"broadcast_lead_fields.Phone_Number": {"$in": variants}}
+                    ]
+                },
+                {"call_to_number": 1, "customer_no_with_prefix ": 1, "_id": 0}
+            )
+            for o in answered_out:
+                for f in ("call_to_number", "customer_no_with_prefix "):
+                    val = o.get(f)
+                    if val:
+                        d10 = re.sub(r"\D", "", str(val))[-10:]
+                        if d10 in all_numbers_10:
+                            called_set.add(d10)
+
+            in_col = db_inst["hook_v2_inbound_hangup_answered"]
+            answered_in = in_col.find(
+                {"caller_id_number": {"$in": variants}},
+                {"caller_id_number": 1, "_id": 0}
+            )
+            for i in answered_in:
+                val = i.get("caller_id_number")
+                if val:
+                    d10 = re.sub(r"\D", "", str(val))[-10:]
+                    if d10 in all_numbers_10:
+                        called_set.add(d10)
+
+        results = []
+        for c in missed_calls:
+            num = c.get("caller_id_number") or ""
+            d10 = re.sub(r"\D", "", str(num))[-10:]
+            is_pending = d10 not in called_set
+
+            status = "pending" if is_pending else "called"
+            if status_filter == "pending" and not is_pending:
+                continue
+
+            # Resolve agents
+            agents = []
+            ma = c.get("missed_agent")
+            if isinstance(ma, list):
+                for a in ma:
+                    if isinstance(a, dict) and a.get("name"):
+                        agents.append(a["name"])
+            elif isinstance(ma, str) and ma:
+                agents.append(ma)
+            if not agents and c.get("answered_agent_name"):
+                agents.append(c["answered_agent_name"])
+
+            # Resolve customer name and source
+            bfields = c.get("broadcast_lead_fields") or {}
+            cust_name = bfields.get("Full_Name") or bfields.get("Customer_Name") or ""
+            if cust_name in ("nt", "Unknown"):
+                cust_name = ""
+
+            source = c.get("source_name") or bfields.get("Source") or ""
+            circle_info = c.get("billing_circle") or ""
+            circle_str = circle_info.get("circle", "") if isinstance(circle_info, dict) else str(circle_info)
+            operator_str = circle_info.get("operator", "") if isinstance(circle_info, dict) else ""
+
+            duration_val = c.get("duration") or 0
+            try:
+                duration_int = int(float(duration_val))
+            except (ValueError, TypeError):
+                duration_int = 0
+
+            created_iso = c.get("createdAt").isoformat() if hasattr(c.get("createdAt"), "isoformat") else str(c.get("createdAt") or "")
+
+            results.append({
+                "id": str(c.get("_id", "")),
+                "callId": c.get("call_id", ""),
+                "phone_number": num,
+                "customer_name": cust_name,
+                "source": source,
+                "dialedDid": c.get("call_to_number") or "",
+                "campaign": c.get("campaign_name") or "",
+                "missedAgents": agents,
+                "duration": duration_int,
+                "circle": circle_str,
+                "operator": operator_str,
+                "createdAt": created_iso,
+                "startStamp": c.get("start_stamp") or "",
+                "status": status,
+            })
+
+        return results
+    except Exception as exc:
+        logger.error(f"Failed to fetch CRM missed calls natively: {exc}")
+        return []
