@@ -6,6 +6,7 @@ import LiveConsoleView from './components/LiveConsoleView';
 import PendingCallsTab from './components/PendingCallsTab';
 import BatchesTab from './components/BatchesTab';
 import CompletedLogsTab from './components/CompletedLogsTab';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Main Swargaseema AI Telephony Console Application with full-width Left Sidebar Layout
 export default function App() {
@@ -395,13 +396,15 @@ export default function App() {
         {/* View 3: Campaign Batches */}
         {activeNav === 'batches' && (
           <div className="bg-white p-4 flex-1 min-h-0 overflow-y-auto">
-            <BatchesTab
-              batches={batches}
-              isLoadingBatches={isLoadingBatches}
-              onRefreshBatches={fetchBatches}
-              onRefreshCampaign={fetchCampaignStatus}
-              onQueueLeads={handleQueueLeads}
-            />
+            <ErrorBoundary onReset={fetchBatches}>
+              <BatchesTab
+                batches={batches}
+                isLoadingBatches={isLoadingBatches}
+                onRefreshBatches={fetchBatches}
+                onRefreshCampaign={fetchCampaignStatus}
+                onQueueLeads={handleQueueLeads}
+              />
+            </ErrorBoundary>
           </div>
         )}
 

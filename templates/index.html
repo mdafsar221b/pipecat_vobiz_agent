@@ -1790,8 +1790,9 @@
       batchesContainer.innerHTML = batches.map(b => {
         const m = b.metrics || {};
         const isCompleted = b.status === 'completed';
-        const startedTime = b.started_at ? new Date(b.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--';
-        const startedDate = b.started_at ? new Date(b.started_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
+        const rawDt = b.created_at ? new Date(b.created_at.replace(' ', 'T')) : (b.started_at ? new Date(typeof b.started_at === 'number' && b.started_at < 1e11 ? b.started_at * 1000 : b.started_at) : null);
+        const startedTime = rawDt && !isNaN(rawDt.getTime()) ? rawDt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--';
+        const startedDate = rawDt && !isNaN(rawDt.getTime()) ? rawDt.toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
         const statusClass = isCompleted ? 'idle' : 'running';
 
         return `

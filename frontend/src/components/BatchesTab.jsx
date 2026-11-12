@@ -26,6 +26,29 @@ import {
   getDiagnosticConfig,
 } from '../utils/formatters';
 
+// Helper to format batch launch timestamps safely
+const formatLaunchTimestamp = (b) => {
+  try {
+    if (b?.created_at) {
+      const clean = String(b.created_at).replace(' ', 'T');
+      const dt = new Date(clean);
+      if (!isNaN(dt.getTime())) {
+        return `${dt.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      }
+    }
+    if (b?.started_at) {
+      const ms = typeof b.started_at === 'number' && b.started_at < 1e11 ? b.started_at * 1000 : b.started_at;
+      const dt = new Date(ms);
+      if (!isNaN(dt.getTime())) {
+        return `${dt.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return b?.created_at || '--';
+};
+
 // Campaign batches history and per-batch drilldown view with interactive KPI card filters
 export default function BatchesTab({
   batches = [],
@@ -43,6 +66,7 @@ export default function BatchesTab({
   // Batch Detail Filters
   const [batchKpiFilter, setBatchKpiFilter] = useState('all');
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
+  const [batchListSearch, setBatchListSearch] = useState('');
 
   // Batch Detail Selection State
   const [selectedBatchUuids, setSelectedBatchUuids] = useState(new Set());
@@ -155,6 +179,19 @@ export default function BatchesTab({
 
     return list;
   }, [batchDetail, batchKpiFilter, batchSearchQuery]);
+
+  // Filter batches list by search query (Top-level hook to satisfy React Rules of Hooks)
+  const filteredBatches = useMemo(() => {
+    if (!batchListSearch.trim()) return batches;
+    const q = batchListSearch.trim().toLowerCase();
+    return batches.filter(
+      (b) =>
+        (b.name || '').toLowerCase().includes(q) ||
+        (b.batch_id || '').toLowerCase().includes(q) ||
+        (b.source_filter || '').toLowerCase().includes(q) ||
+        (b.status || '').toLowerCase().includes(q)
+    );
+  }, [batches, batchListSearch]);
 
   // View B: Detail View
   if (activeBatchId) {
@@ -603,7 +640,10 @@ export default function BatchesTab({
                   </td>
                 </tr>
               ) : (
-                filteredBatchCalls.map((entry) => {
+                filteredBatchCalls.map((entry, idx) => {
+                  const callUuid = entry.call_uuid || entry.lead_id || `call-${idx}`;
+                  const shortUuid = String(callUuid).slice(0, 8);
+                  const displayPhone = entry.phone_number || String(callUuid).slice(0, 12);
                   const recUrl = entry.recording_url;
                   const durationSec = entry.duration || 0;
                   const dispConf = getDispositionConfig(entry.disposition);
@@ -616,21 +656,21 @@ export default function BatchesTab({
                   const outBytes = am.outbound_bytes || 0;
                   const inChunks = am.inbound_chunks || 0;
 
-                  const isTranscriptOpen = openTranscriptId === entry.call_uuid;
-                  const isTimelineOpen = openTimelineId === entry.call_uuid;
+                  const isTranscriptOpen = openTranscriptId === callUuid;
+                  const isTimelineOpen = openTimelineId === callUuid;
                   const turnsCount = (entry.turns || []).length;
                   const eventsCount = (entry.events || []).length;
-                  const isChecked = selectedBatchUuids.has(entry.call_uuid);
+                  const isChecked = selectedBatchUuids.has(callUuid);
 
                   return (
-                    <React.Fragment key={entry.call_uuid}>
+                    <React.Fragment key={callUuid}>
                       <tr className={`hover:bg-slate-50/80 transition-colors ${isChecked ? 'bg-[#008792]/5' : isTranscriptOpen || isTimelineOpen ? 'bg-slate-50/50' : ''}`}>
                         {/* Checkbox */}
                         <td className="px-3.5 py-3">
                           <input
                             type="checkbox"
                             checked={isChecked}
-                            onChange={() => toggleSelectBatchCall(entry.call_uuid)}
+                            onChange={() => toggleSelectBatchCall(callUuid)}
                             className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
                           />
                         </td>
@@ -639,7 +679,7 @@ export default function BatchesTab({
                         <td className="px-3.5 py-3 whitespace-nowrap">
                           <div className="flex items-center gap-2">
                             <span className="font-mono text-xs font-bold text-slate-900">
-                              {entry.phone_number || entry.call_uuid.slice(0, 12)}
+                              {displayPhone}
                             </span>
                             {custName && (
                               <span className="text-[11px] font-semibold text-[#008792] bg-[#008792]/10 px-1.5 py-0.5 border border-[#008792]/20">
@@ -648,7 +688,7 @@ export default function BatchesTab({
                             )}
                           </div>
                           <div className="text-[10px] font-mono text-slate-400 mt-0.5">
-                            #{entry.call_uuid.slice(0, 8)}
+                            #{shortUuid}
                           </div>
                         </td>
 
@@ -710,7 +750,7 @@ export default function BatchesTab({
                               controls
                               preload="none"
                               className="w-48 h-7 outline-none"
-                              src={`/api/recording/${encodeURIComponent(entry.call_uuid)}`}
+                              src={`/api/recording/${encodeURIComponent(callUuid)}`}
                             />
                           ) : (
                             <span className="text-[11px] text-slate-400 italic">No recording</span>
@@ -721,7 +761,7 @@ export default function BatchesTab({
                         <td className="px-3.5 py-3 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end gap-1.5">
                             <button
-                              onClick={() => toggleTranscript(entry.call_uuid)}
+                              onClick={() => toggleTranscript(callUuid)}
                               className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold border transition ${
                                 isTranscriptOpen
                                   ? 'bg-[#008792] text-white border-[#008792]'
@@ -734,7 +774,7 @@ export default function BatchesTab({
                             </button>
 
                             <button
-                              onClick={() => toggleTimeline(entry.call_uuid)}
+                              onClick={() => toggleTimeline(callUuid)}
                               className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold border transition ${
                                 isTimelineOpen
                                   ? 'bg-slate-800 text-white border-slate-800'
@@ -760,7 +800,7 @@ export default function BatchesTab({
                                     Dialog Transcript ({turnsCount} turns)
                                   </span>
                                   <span className="text-[10px] text-slate-400 font-mono">
-                                    UUID: {entry.call_uuid}
+                                    UUID: {callUuid}
                                   </span>
                                 </div>
 
@@ -854,31 +894,56 @@ export default function BatchesTab({
         </button>
       </div>
 
-      <div className="space-y-3 max-h-[640px] overflow-y-auto pr-1">
-        {batches.length === 0 ? (
+      {/* Batches Search & Stats Filter */}
+      {batches.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2.5 bg-slate-50 border border-slate-200 p-2.5 text-xs">
+          <div className="flex items-center gap-2 flex-1 min-w-[240px]">
+            <Search className="w-3.5 h-3.5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search batches by name (e.g. 10-09, 150), Batch ID, or status..."
+              value={batchListSearch}
+              onChange={(e) => setBatchListSearch(e.target.value)}
+              className="w-full bg-transparent outline-none text-slate-800 placeholder-slate-400 text-xs"
+            />
+            {batchListSearch && (
+              <button onClick={() => setBatchListSearch('')} className="text-slate-400 hover:text-slate-600">
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+          <div className="text-[11px] text-slate-500 font-mono">
+            Showing <span className="font-bold text-slate-900">{filteredBatches.length}</span> of {batches.length} batches
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-3 max-h-[720px] overflow-y-auto pr-1">
+        {filteredBatches.length === 0 ? (
           <div className="text-center py-14 bg-slate-50/50 border border-dashed border-slate-200">
             <Layers className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-            <p className="text-xs font-semibold text-slate-700">No campaign batches recorded yet</p>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              Select leads from the CRM Pending Queue and click 'Queue Selected to Dialer' to launch a batch.
+            <p className="text-xs font-semibold text-slate-700">
+              {batchListSearch ? 'No batches match your search filter' : 'No campaign batches recorded yet'}
             </p>
+            {batchListSearch && (
+              <button
+                onClick={() => setBatchListSearch('')}
+                className="mt-2 text-xs font-semibold text-[#008792] hover:underline"
+              >
+                Clear Search
+              </button>
+            )}
+            {!batchListSearch && (
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Select leads from the CRM Pending Queue and click 'Queue Selected to Dialer' to launch a batch.
+              </p>
+            )}
           </div>
         ) : (
-          batches.map((b) => {
+          filteredBatches.map((b) => {
             const m = b.metrics || {};
             const isCompleted = b.status === 'completed';
-            const startedTime = b.started_at
-              ? new Date(b.started_at).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })
-              : '--';
-            const startedDate = b.started_at
-              ? new Date(b.started_at).toLocaleDateString([], {
-                  month: 'short',
-                  day: 'numeric',
-                })
-              : '';
+            const launchTimestamp = formatLaunchTimestamp(b);
 
             return (
               <div
@@ -905,7 +970,7 @@ export default function BatchesTab({
                 <div className="text-xs text-slate-400 mb-3 flex items-center gap-2">
                   <span>ID: <span className="font-mono text-slate-600">{b.batch_id}</span></span>
                   <span>&bull;</span>
-                  <span>Launched: {startedDate} {startedTime}</span>
+                  <span>Launched: {launchTimestamp}</span>
                   <span>&bull;</span>
                   <span>{b.source_filter || 'CRM Missed Calls'}</span>
                 </div>
