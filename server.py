@@ -17,6 +17,17 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 import httpx
 import uvicorn
+import logging
+
+# Filter out high-frequency polling endpoints from Uvicorn access logs to prevent console spam
+class PollingEndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            return "/api/campaign/status" not in record.getMessage()
+        except Exception:
+            return True
+
+logging.getLogger("uvicorn.access").addFilter(PollingEndpointFilter())
 
 load_dotenv(override=True)
 
@@ -58,6 +69,7 @@ def get_ws_url(path_with_query: str) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logging.getLogger("uvicorn.access").addFilter(PollingEndpointFilter())
     logger.info("Initializing database and agent components...")
     db.get_collection()
     logger.info(f"Pipecat Vobiz Server active at {get_public_url() or f'http://127.0.0.1:{PORT}'}")

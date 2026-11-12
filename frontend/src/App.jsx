@@ -149,16 +149,24 @@ export default function App() {
     }
   }, []);
 
-  // Initial Load and 1s Interval
+  // Initial Load and Adaptive Polling (1.5s when dialing/in-call, 4s when idle; pauses when tab hidden)
   useEffect(() => {
     fetchCrmPendingCalls();
     fetchCampaignStatus();
     fetchCompletedLogs();
     fetchBatches();
 
-    const timer = setInterval(fetchCampaignStatus, 1000);
+    const isBusy = campaignData?.status === 'running' || (campaignData?.active_calls && campaignData.active_calls.length > 0);
+    const delay = isBusy ? 1500 : 4000;
+
+    const timer = setInterval(() => {
+      if (!document.hidden) {
+        fetchCampaignStatus();
+      }
+    }, delay);
+
     return () => clearInterval(timer);
-  }, [fetchCampaignStatus, fetchCrmPendingCalls, fetchCompletedLogs, fetchBatches]);
+  }, [fetchCampaignStatus, fetchCrmPendingCalls, fetchCompletedLogs, fetchBatches, campaignData?.status, (campaignData?.active_calls || []).length]);
 
   // Campaign Actions
   const handleStartCampaign = async () => {
