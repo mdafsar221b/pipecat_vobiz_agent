@@ -116,7 +116,7 @@ export default function App() {
     setIsLoadingCrm(true);
     setCrmError('');
     try {
-      const res = await fetch(`/api/crm/pending-calls?start_date=${start}&end_date=${end}`);
+      const res = await fetch(`/api/crm/pending-calls?start_date=${start}&end_date=${end}&status=all`);
       const data = await res.json();
       if (!res.ok || !data.ok) {
         const err = data.error || 'Failed to query CRM';

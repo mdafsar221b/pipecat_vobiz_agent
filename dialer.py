@@ -28,9 +28,14 @@ class OutboundDialer:
         self.total_batch_leads: int = 0
 
     # Fetch pending calls from CRM using the node service
-    def fetch_crm_pending(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict[str, Any]]:
+    def fetch_crm_pending(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        status: Optional[str] = "all",
+    ) -> List[Dict[str, Any]]:
         script_path = BASE_DIR / "crm_service.cjs"
-        cmd = ["node", str(script_path), start_date or "", end_date or ""]
+        cmd = ["node", str(script_path), start_date or "", end_date or "", status or "all"]
         try:
             res = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True, text=True, timeout=25)
             if res.returncode == 0 and res.stdout.strip():

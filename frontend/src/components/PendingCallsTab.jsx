@@ -25,6 +25,7 @@ export default function PendingCallsTab({
   const [searchText, setSearchText] = useState('');
   const [uniqueOnly, setUniqueOnly] = useState(true);
   const [aiFilter, setAiFilter] = useState('all');
+  const [crmFilter, setCrmFilter] = useState('all');
   const [deselectedPhones, setDeselectedPhones] = useState(new Set());
   const [isQueueing, setIsQueueing] = useState(false);
   const [rangeFrom, setRangeFrom] = useState('');
@@ -85,7 +86,7 @@ export default function PendingCallsTab({
     return result;
   }, [crmCalls, uniqueOnly]);
 
-  // Tally counts across AI voice dispositions
+  // Tally counts across AI voice dispositions and CRM status
   const dispoCounts = useMemo(() => {
     const counts = {
       all: sourceCalls.length,
@@ -99,8 +100,13 @@ export default function PendingCallsTab({
       busy: 0,
       not_talking: 0,
       dropped: 0,
+      crmPending: 0,
+      crmCalled: 0,
     };
     for (const c of sourceCalls) {
+      if (c.status === 'called') counts.crmCalled++;
+      else counts.crmPending++;
+
       const info = getAiCallInfo(c);
       const d = (info?.disposition || '').toLowerCase();
       if (!d) {
@@ -116,9 +122,14 @@ export default function PendingCallsTab({
     return counts;
   }, [sourceCalls, completedMap]);
 
-  // Filter calls by AI disposition and search text
+  // Filter calls by CRM status, AI disposition and search text
   const filteredCalls = useMemo(() => {
     let result = sourceCalls;
+
+    // 0. CRM Status Filter (all, pending, called)
+    if (crmFilter !== 'all') {
+      result = result.filter((c) => (c.status || 'pending') === crmFilter);
+    }
 
     // 1. AI Disposition Filter
     if (aiFilter !== 'all') {
@@ -471,9 +482,24 @@ export default function PendingCallsTab({
               Retry Queue ({dispoCounts.not_answering_busy || 0})
             </button>
 
-            {aiFilter !== 'all' && (
+            {/* Quick Filter: CRM Pending Callback Only */}
+            <button
+              onClick={() => setCrmFilter(crmFilter === 'pending' ? 'all' : 'pending')}
+              className={`px-2.5 py-1 text-xs font-semibold transition border ${
+                crmFilter === 'pending'
+                  ? 'bg-[#008792] text-white border-[#008792]'
+                  : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-200'
+              }`}
+            >
+              CRM Pending ({dispoCounts.crmPending || 0})
+            </button>
+
+            {(aiFilter !== 'all' || crmFilter !== 'all') && (
               <button
-                onClick={() => setAiFilter('all')}
+                onClick={() => {
+                  setAiFilter('all');
+                  setCrmFilter('all');
+                }}
                 className="text-xs font-semibold text-rose-600 hover:text-rose-700 bg-white border border-rose-200 px-2.5 py-1 transition"
               >
                 Reset Filter
@@ -699,8 +725,14 @@ export default function PendingCallsTab({
                       {c.duration || 0}s
                     </td>
                     <td className="px-3.5 py-3 whitespace-nowrap">
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-[#008792]/10 text-[#008792] border border-[#008792]/20">
-                        Pending
+                      <span
+                        className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 border ${
+                          c.status === 'called'
+                            ? 'bg-slate-100 text-slate-600 border-slate-200'
+                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        }`}
+                      >
+                        {c.status === 'called' ? 'Called' : 'Pending'}
                       </span>
                     </td>
                     <td className="px-3.5 py-3 whitespace-nowrap">
@@ -728,10 +760,15 @@ export default function PendingCallsTab({
       <div className="flex items-center justify-between text-xs text-slate-500 px-1">
         <span>
           Showing <strong className="text-slate-800">{filteredCalls.length}</strong> of{' '}
-          <strong className="text-slate-800">{sourceCalls.length}</strong> pending calls{uniqueNote}
+          <strong className="text-slate-800">{sourceCalls.length}</strong> leads{uniqueNote}
+          {crmFilter !== 'all' && (
+            <span className="text-emerald-700 font-semibold ml-1.5">
+              (CRM: {crmFilter})
+            </span>
+          )}
           {aiFilter !== 'all' && (
             <span className="text-[#008792] font-semibold ml-1.5">
-              (Filtered: {aiFilter.replace(/_/g, ' ')})
+              (AI: {aiFilter.replace(/_/g, ' ')})
             </span>
           )}
         </span>

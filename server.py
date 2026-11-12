@@ -299,8 +299,12 @@ async def get_campaign_status():
 
 # Fetch CRM pending missed calls
 @app.get("/api/crm/pending-calls")
-async def get_crm_pending_calls(start_date: Optional[str] = None, end_date: Optional[str] = None):
-    calls = dialer.fetch_crm_pending(start_date, end_date)
+async def get_crm_pending_calls(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    status: Optional[str] = "all",
+):
+    calls = dialer.fetch_crm_pending(start_date, end_date, status)
     return {"ok": True, "calls": calls, "total": len(calls)}
 
 # Queue selected leads into outbound campaign
