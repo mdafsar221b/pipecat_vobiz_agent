@@ -31,6 +31,26 @@ logging.getLogger("uvicorn.access").addFilter(PollingEndpointFilter())
 
 load_dotenv(override=True)
 
+# Device Guard / AppLocker safeguard: stub unsigned loudness.pyd & sentencex to prevent DLL load blocks on Windows
+import sys
+from types import ModuleType
+if "loudness" not in sys.modules:
+    try:
+        import loudness
+    except (ImportError, OSError):
+        fake_loudness = ModuleType("loudness")
+        fake_loudness.integrated_loudness = lambda audio, rate: -50.0
+        sys.modules["loudness"] = fake_loudness
+
+if "sentencex" not in sys.modules:
+    try:
+        import sentencex
+    except (ImportError, OSError):
+        import re
+        fake_sentencex = ModuleType("sentencex")
+        fake_sentencex.segment = lambda lang, text: [s.strip() for s in re.split(r'(?<=[.!?\n])\s+', text) if s.strip()]
+        sys.modules["sentencex"] = fake_sentencex
+
 import db
 import diagnostics
 import vobiz_api

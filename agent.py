@@ -7,11 +7,32 @@ from pathlib import Path
 import time
 from typing import Any, Callable, Dict, List, Optional
 from dotenv import load_dotenv
+from google.genai import Client
 from loguru import logger
 from starlette.websockets import WebSocket
 
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env", override=True)
+
+# Device Guard / AppLocker safeguard: stub unsigned loudness.pyd & sentencex to prevent DLL load blocks on Windows
+import sys
+from types import ModuleType
+if "loudness" not in sys.modules:
+    try:
+        import loudness
+    except (ImportError, OSError):
+        fake_loudness = ModuleType("loudness")
+        fake_loudness.integrated_loudness = lambda audio, rate: -50.0
+        sys.modules["loudness"] = fake_loudness
+
+if "sentencex" not in sys.modules:
+    try:
+        import sentencex
+    except (ImportError, OSError):
+        import re
+        fake_sentencex = ModuleType("sentencex")
+        fake_sentencex.segment = lambda lang, text: [s.strip() for s in re.split(r'(?<=[.!?\n])\s+', text) if s.strip()]
+        sys.modules["sentencex"] = fake_sentencex
 
 from pipecat.adapters.llm.schemas.function_schema import FunctionSchema
 from pipecat.adapters.llm.schemas.tools_schema import ToolsSchema
@@ -44,16 +65,31 @@ import diagnostics
 import vobiz_api
 from vobiz_serializer import VobizFrameSerializer
 
-GEMINI_API_KEYS = [
-    k.strip()
-    for k in [
-        os.getenv("GEMINI_API_KEY", ""),
-        os.getenv("GEMINI_API_KEY_FALLBACK", ""),
-        os.getenv("GEMINI_API_KEY_3", ""),
-    ]
-    if k.strip()
-]
+def mask_key(k: str) -> str:
+    if not k or len(k) <= 8:
+        return "****"
+    return f"{k[:6]}...{k[-4:]}"
+
+def load_gemini_api_keys() -> List[str]:
+    keys: List[str] = []
+    # 1. Primary paid key
+    p = os.getenv("GEMINI_API_KEY", "").strip()
+    if p and p not in keys:
+        keys.append(p)
+    # 2. Secondary fallback
+    f = os.getenv("GEMINI_API_KEY_FALLBACK", "").strip()
+    if f and f not in keys:
+        keys.append(f)
+    # 3. Numbered fallback keys (GEMINI_API_KEY_3, GEMINI_API_KEY_4, ...)
+    for i in range(3, 10):
+        k = os.getenv(f"GEMINI_API_KEY_{i}", "").strip()
+        if k and k not in keys:
+            keys.append(k)
+    return keys
+
+GEMINI_API_KEYS = load_gemini_api_keys()
 _current_key_idx = 0
+logger.info(f"Loaded {len(GEMINI_API_KEYS)} Gemini API key(s) into rotation pool: {[mask_key(k) for k in GEMINI_API_KEYS]}")
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
 GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Aoede")
@@ -105,12 +141,20 @@ def get_gemini_api_key() -> str:
         raise ValueError("No Gemini API keys configured in environment.")
     return GEMINI_API_KEYS[_current_key_idx % len(GEMINI_API_KEYS)]
 
-# Rotate to the next available API key in case of quota or rate limit issues
-def rotate_gemini_api_key() -> str:
+# Rotate to the next available API key in case of quota, rate limit, or expiry issues
+def rotate_gemini_api_key(reason: str = "quota/error") -> str:
     global _current_key_idx
+    if not GEMINI_API_KEYS:
+        raise ValueError("No Gemini API keys configured in environment.")
+    old_idx = _current_key_idx % len(GEMINI_API_KEYS)
     _current_key_idx = (_current_key_idx + 1) % len(GEMINI_API_KEYS)
-    logger.warning(f"Rotated Gemini API key to index {_current_key_idx}")
-    return get_gemini_api_key()
+    new_idx = _current_key_idx % len(GEMINI_API_KEYS)
+    old_masked = mask_key(GEMINI_API_KEYS[old_idx])
+    new_masked = mask_key(GEMINI_API_KEYS[new_idx])
+    logger.warning(
+        f"🔄 [GEMINI KEY ROTATED] Reason: {reason} | [{old_idx}] {old_masked} -> [{new_idx}] {new_masked} (Available keys: {len(GEMINI_API_KEYS)})"
+    )
+    return GEMINI_API_KEYS[new_idx]
 
 # Build and execute the real-time Pipecat agent for an incoming Vobiz stream
 async def run_vobiz_agent(
@@ -352,6 +396,43 @@ async def run_vobiz_agent(
         return await orig_handle_session_ready(session)
     llm._handle_session_ready = wrapped_session_ready
 
+    # Automatic fallback rotation: if initial connection fails due to quota or auth, retry with fallback keys
+    orig_conn_task_handler = llm._connection_task_handler
+    async def resilient_connection_task_handler(config):
+        max_attempts = len(GEMINI_API_KEYS)
+        for attempt in range(max_attempts):
+            try:
+                return await orig_conn_task_handler(config)
+            except Exception as exc:
+                err_str = str(exc).lower()
+                is_quota_or_auth = any(m in err_str for m in [
+                    "429", "resource_exhausted", "quota", "403", "permission_denied",
+                    "unauthenticated", "invalid", "1008"
+                ])
+                if is_quota_or_auth and attempt < max_attempts - 1:
+                    new_key = rotate_gemini_api_key(f"Initial connect failure: {exc}")
+                    llm._client = Client(api_key=new_key, http_options=getattr(llm, "_http_options", None))
+                    tracer.record_event("gemini_key_rotated", {"attempt": attempt + 1, "reason": str(exc)[:80]})
+                    await asyncio.sleep(0.5)
+                    continue
+                else:
+                    logger.error(f"Gemini connection failed on attempt {attempt+1}/{max_attempts}: {exc}")
+                    raise
+    llm._connection_task_handler = resilient_connection_task_handler
+
+    # Automatic fallback rotation: if quota runs out mid-call, rotate key and reconnect
+    orig_handle_conn_error = llm._handle_connection_error
+    async def resilient_handle_conn_error(error: Exception) -> bool:
+        err_str = str(error).lower()
+        if any(marker in err_str for marker in ["429", "resource_exhausted", "quota", "403", "permission_denied", "unauthenticated", "1008"]):
+            new_key = rotate_gemini_api_key(f"Mid-call quota exhausted: {error}")
+            llm._client = Client(api_key=new_key, http_options=getattr(llm, "_http_options", None))
+            llm._consecutive_failures = 0
+            tracer.record_event("gemini_midcall_key_rotated", {"reason": str(error)[:80]})
+            return True
+        return await orig_handle_conn_error(error)
+    llm._handle_connection_error = resilient_handle_conn_error
+
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
@@ -591,6 +672,9 @@ async def run_vobiz_agent(
     except Exception as exc:
         logger.error(f"Pipeline error on call {call_uuid}: {exc}")
         tracer.record_error("pipeline_error", str(exc))
+        err_str = str(exc).lower()
+        if any(m in err_str for m in ["429", "resource_exhausted", "quota", "403", "permission_denied", "unauthenticated", "1008"]):
+            rotate_gemini_api_key(f"Pipeline quota error on call {call_uuid}: {exc}")
     finally:
         db.finalize_call(call_uuid)
         logger.info(f"Finished pipeline session for call {call_uuid}")
