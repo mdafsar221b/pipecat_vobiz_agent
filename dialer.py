@@ -109,7 +109,7 @@ class OutboundDialer:
             "source_filter": source_filter or "CRM Missed Calls",
             "total_leads": len(self.queue),
             "status": "active",
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "created_at": db.now_iso(),
             "started_at": time.time(),
         }
         db.save_batch(batch_doc)

@@ -16,18 +16,116 @@ export function formatDuration(seconds) {
   return `${m}m ${s}s`;
 }
 
-export function formatTime(isoOrTimestamp) {
+export function formatTime(isoOrTimestamp, options = {}) {
   if (!isoOrTimestamp) return '--';
-  const date = new Date(isoOrTimestamp);
-  if (isNaN(date.getTime())) return String(isoOrTimestamp);
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  const defaultOpts = {
+    timeZone: 'Asia/Kolkata',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+    ...options,
+  };
+
+  if (typeof isoOrTimestamp === 'number') {
+    const ms = isoOrTimestamp < 1e11 ? isoOrTimestamp * 1000 : isoOrTimestamp;
+    const d = new Date(ms);
+    return isNaN(d.getTime())
+      ? String(isoOrTimestamp)
+      : d.toLocaleTimeString('en-US', defaultOpts).replace(/\u202f/g, ' ');
+  }
+
+  let str = String(isoOrTimestamp).trim();
+
+  // If already contains AM/PM and doesn't look like an ISO string
+  if (/(am|pm)/i.test(str) && !str.includes('T') && !/^\d{4}-\d{2}-\d{2}/.test(str)) {
+    return str;
+  }
+
+  // Check if it's purely a time string like "14:00:03" or "14:00"
+  const timeOnly = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (timeOnly) {
+    let [_, h, m, s] = timeOnly;
+    let hour = parseInt(h, 10);
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    hour = hour % 12 || 12;
+    const sec = s !== undefined && defaultOpts.second !== undefined ? ':' + s.padStart(2, '0') : '';
+    return `${hour}:${m.padStart(2, '0')}${sec} ${ampm}`;
+  }
+
+  // Parse ISO or Date string
+  let d = new Date(str);
+  if (isNaN(d.getTime()) && str.includes(' ')) {
+    d = new Date(str.replace(' ', 'T'));
+  }
+
+  if (!isNaN(d.getTime())) {
+    return d.toLocaleTimeString('en-US', defaultOpts).replace(/\u202f/g, ' ');
+  }
+
+  return str;
 }
 
 export function formatDate(isoOrTimestamp) {
   if (!isoOrTimestamp) return '--';
-  const date = new Date(isoOrTimestamp);
-  if (isNaN(date.getTime())) return String(isoOrTimestamp);
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+  const ms = typeof isoOrTimestamp === 'number' && isoOrTimestamp < 1e11 ? isoOrTimestamp * 1000 : isoOrTimestamp;
+  const d = new Date(ms);
+  if (isNaN(d.getTime())) {
+    const d2 = new Date(String(isoOrTimestamp).replace(' ', 'T'));
+    if (!isNaN(d2.getTime())) {
+      return d2.toLocaleDateString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+    }
+    return String(isoOrTimestamp);
+  }
+  return d.toLocaleDateString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+export function formatCallbackTime(cbStr) {
+  if (!cbStr) return '';
+  let str = String(cbStr).trim();
+
+  // If it's an ISO timestamp like "2026-11-15T14:30:00Z"
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
+    const clean = str.includes(' ') && !str.includes('T') ? str.replace(' ', 'T') : str;
+    const d = new Date(clean);
+    if (!isNaN(d.getTime())) {
+      const dtPart = d.toLocaleDateString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        month: 'short',
+        day: 'numeric',
+      });
+      const tmPart = d.toLocaleTimeString('en-US', {
+        timeZone: 'Asia/Kolkata',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      }).replace(/\u202f/g, ' ');
+      return `${dtPart}, ${tmPart}`;
+    }
+  }
+
+  // If it contains a 24h pattern like "14:00" or "14:00:00" without AM/PM
+  if (!/(am|pm)/i.test(str)) {
+    str = str.replace(/\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b/g, (match, h, m) => {
+      let hour = parseInt(h, 10);
+      const ampm = hour >= 12 ? 'PM' : 'AM';
+      hour = hour % 12 || 12;
+      return `${hour}:${m} ${ampm}`;
+    });
+  }
+
+  return str;
 }
 
 export function getDispositionConfig(disposition) {

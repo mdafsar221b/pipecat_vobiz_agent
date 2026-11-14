@@ -17,11 +17,16 @@ import {
   RotateCcw,
   ArrowRight,
   Download,
+  Languages,
+  FileText,
+  Check,
+  Headphones,
 } from 'lucide-react';
 import {
   formatBytes,
   formatDuration,
   formatTime,
+  formatCallbackTime,
   getDispositionConfig,
   getDiagnosticConfig,
 } from '../utils/formatters';
@@ -29,24 +34,48 @@ import {
 // Helper to format batch launch timestamps safely
 const formatLaunchTimestamp = (b) => {
   try {
-    if (b?.created_at) {
-      const clean = String(b.created_at).replace(' ', 'T');
-      const dt = new Date(clean);
-      if (!isNaN(dt.getTime())) {
-        return `${dt.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-      }
-    }
     if (b?.started_at) {
       const ms = typeof b.started_at === 'number' && b.started_at < 1e11 ? b.started_at * 1000 : b.started_at;
       const dt = new Date(ms);
       if (!isNaN(dt.getTime())) {
-        return `${dt.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+        const dStr = dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' });
+        const tStr = dt.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true });
+        return `${dStr} ${tStr}`;
+      }
+    }
+    if (b?.created_at) {
+      const clean = String(b.created_at).replace(' ', 'T');
+      const dt = new Date(clean);
+      if (!isNaN(dt.getTime())) {
+        const dStr = dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' });
+        const tStr = dt.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true });
+        return `${dStr} ${tStr}`;
       }
     }
   } catch {
     // fallback
   }
   return b?.created_at || '--';
+};
+
+// Helper to guarantee 100% pure target language without leftover Telugu script
+const cleanTurnText = (text, lang) => {
+  if (!text) return '';
+  const str = String(text).trim();
+  const hasTelugu = /[\u0C00-\u0C7F]/.test(str);
+  if (lang === 'en' && hasTelugu) {
+    const match = str.match(/\(([^)]+)\)/);
+    if (match && !/[\u0C00-\u0C7F]/.test(match[1])) return match[1].trim();
+    const noTelugu = str.replace(/[\u0C00-\u0C7F]+/g, '').replace(/^[()\-:\s.,]+|[()\-:\s.,]+$/g, '').trim();
+    if (noTelugu && /[a-zA-Z]/.test(noTelugu)) return noTelugu;
+  }
+  if (lang === 'hi' && hasTelugu) {
+    const match = str.match(/\(([^)]+)\)/);
+    if (match && /[\u0900-\u097F]/.test(match[1]) && !/[\u0C00-\u0C7F]/.test(match[1])) return match[1].trim();
+    const noTelugu = str.replace(/[\u0C00-\u0C7F]+/g, '').replace(/^[()\-:\s.,]+|[()\-:\s.,]+$/g, '').trim();
+    if (noTelugu && /[\u0900-\u097F]/.test(noTelugu)) return noTelugu;
+  }
+  return str;
 };
 
 // Campaign batches history and per-batch drilldown view with interactive KPI card filters
@@ -71,6 +100,107 @@ export default function BatchesTab({
   // Batch Detail Selection State
   const [selectedBatchUuids, setSelectedBatchUuids] = useState(new Set());
   const [isQueueingBatchCalls, setIsQueueingBatchCalls] = useState(false);
+
+  // Transcript Translation & Export State
+  const [activeLangByCall, setActiveLangByCall] = useState({}); // { [uuid]: 'orig' | 'en' | 'hi' }
+  const [translationsByCall, setTranslationsByCall] = useState({}); // { [uuid]: { en?: [], hi?: [] } }
+  const [translatingCallId, setTranslatingCallId] = useState(null); // `${uuid}-${lang}`
+  const [translationError, setTranslationError] = useState({}); // { [uuid]: string }
+
+  const handleSwitchLanguage = async (callUuid, targetLang, defaultTurns = []) => {
+    if (targetLang === 'orig') {
+      setActiveLangByCall((prev) => ({ ...prev, [callUuid]: 'orig' }));
+      return;
+    }
+
+    setActiveLangByCall((prev) => ({ ...prev, [callUuid]: targetLang }));
+
+    // Check if we already have it in translationsByCall or if the call entry has it
+    const cached = translationsByCall[callUuid]?.[targetLang];
+    if (cached && cached.length > 0) return;
+
+    // Trigger translation from API
+    setTranslatingCallId(`${callUuid}-${targetLang}`);
+    setTranslationError((prev) => ({ ...prev, [callUuid]: null }));
+
+    try {
+      const res = await fetch(`/api/calls/${encodeURIComponent(callUuid)}/translate?lang=${targetLang}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: targetLang }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Failed to translate conversation');
+      }
+      setTranslationsByCall((prev) => ({
+        ...prev,
+        [callUuid]: {
+          ...(prev[callUuid] || {}),
+          [targetLang]: data.turns || [],
+        },
+      }));
+    } catch (err) {
+      setTranslationError((prev) => ({
+        ...prev,
+        [callUuid]: err.message,
+      }));
+    } finally {
+      setTranslatingCallId(null);
+    }
+  };
+
+  const handleReTranscribeFromAudio = async (callUuid, targetLang = 'en') => {
+    const lang = targetLang || activeLangByCall[callUuid] || 'en';
+    setActiveLangByCall((prev) => ({ ...prev, [callUuid]: lang }));
+    setTranslatingCallId(`${callUuid}-${lang}-audio`);
+    setTranslationError((prev) => ({ ...prev, [callUuid]: null }));
+
+    try {
+      const res = await fetch(`/api/calls/${encodeURIComponent(callUuid)}/translate?lang=${lang}&force_audio=1`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: lang, force_audio: true }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Failed to re-transcribe from audio recording');
+      }
+      setTranslationsByCall((prev) => ({
+        ...prev,
+        [callUuid]: {
+          ...(prev[callUuid] || {}),
+          [lang]: data.turns || [],
+          ...(lang === 'orig' ? { orig: data.turns || [] } : {}),
+          [`${lang}_source`]: 'audio',
+        },
+      }));
+    } catch (err) {
+      setTranslationError((prev) => ({
+        ...prev,
+        [callUuid]: err.message,
+      }));
+    } finally {
+      setTranslatingCallId(null);
+    }
+  };
+
+  const handleDownloadTranscriptTxt = (callUuid, displayPhone, turns, lang) => {
+    if (!turns || turns.length === 0) return;
+    const header = `Swargaseema Voice AI - Call Transcript\nPhone: ${displayPhone}\nCall UUID: ${callUuid}\nLanguage: ${String(lang).toUpperCase()}\nDate: ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour12: true })}\n${'='.repeat(40)}\n\n`;
+    const body = turns
+      .map((t) => `[${t.role === 'agent' ? 'Ananya (Voice AI)' : 'Customer'}]:\n${t.text}\n`)
+      .join('\n');
+    const blob = new Blob([header + body], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `transcript-${displayPhone}-${lang}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const toggleTranscript = (callUuid) => {
     setOpenTranscriptId((prev) => (prev === callUuid ? null : callUuid));
@@ -274,7 +404,7 @@ export default function BatchesTab({
         }
 
         const now = new Date();
-        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const timeStr = now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true }).replace(/\u202f/g, ' ');
         const batchName = `Batch Retry (${b.name || b.batch_id || 'Batch'}) - ${leads.length} calls (${timeStr})`;
         const sourceFilter = `Batch ${b.batch_id} Retry`;
 
@@ -649,7 +779,7 @@ export default function BatchesTab({
                   const dispConf = getDispositionConfig(entry.disposition);
                   const diagConf = getDiagnosticConfig(entry.diagnostic?.classification);
                   const custName = entry.customer_name || entry.contact_name || '';
-                  const cbTime = entry.callback_time || '';
+                  const cbTime = formatCallbackTime(entry.callback_time || '');
                   const diag = entry.diagnostic || {};
                   const am = diag.audio_metrics || entry.audio_metrics || {};
                   const inBytes = am.inbound_bytes || 0;
@@ -744,14 +874,24 @@ export default function BatchesTab({
                         </td>
 
                         {/* Audio Recording */}
-                        <td className="px-3.5 py-3 whitespace-nowrap min-w-[200px]">
+                        <td className="px-3.5 py-3 whitespace-nowrap min-w-[240px]">
                           {(recUrl || (durationSec > 5 && (inBytes > 0 || outBytes > 0))) ? (
-                            <audio
-                              controls
-                              preload="none"
-                              className="w-48 h-7 outline-none"
-                              src={`/api/recording/${encodeURIComponent(callUuid)}`}
-                            />
+                            <div className="flex items-center gap-1.5">
+                              <audio
+                                controls
+                                preload="none"
+                                className="w-44 h-7 outline-none"
+                                src={`/api/recording/${encodeURIComponent(callUuid)}`}
+                              />
+                              <a
+                                href={`/api/recording/${encodeURIComponent(callUuid)}?download=1`}
+                                download={`call-${displayPhone || shortUuid}.mp3`}
+                                title="Download Audio Recording (.mp3)"
+                                className="inline-flex items-center justify-center w-7 h-7 bg-white hover:bg-[#008792] text-slate-500 hover:text-white border border-slate-200 transition-colors shadow-xs flex-shrink-0 cursor-pointer"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                              </a>
+                            </div>
                           ) : (
                             <span className="text-[11px] text-slate-400 italic">No recording</span>
                           )}
@@ -790,53 +930,237 @@ export default function BatchesTab({
                       </tr>
 
                       {/* Expandable Accordion Row */}
-                      {(isTranscriptOpen || isTimelineOpen) && (
-                        <tr className="bg-slate-50/70 border-b border-slate-200">
-                          <td colSpan={9} className="p-3.5">
-                            {isTranscriptOpen && (
-                              <div className="bg-white border border-slate-200 p-3 space-y-2 mb-2.5">
-                                <div className="flex items-center justify-between pb-2 border-b border-slate-100 text-xs">
-                                  <span className="font-bold text-slate-800 uppercase tracking-wider">
-                                    Dialog Transcript ({turnsCount} turns)
-                                  </span>
-                                  <span className="text-[10px] text-slate-400 font-mono">
-                                    UUID: {callUuid}
-                                  </span>
-                                </div>
+                      {(isTranscriptOpen || isTimelineOpen) && (() => {
+                        const activeLang = activeLangByCall[callUuid] || 'orig';
+                        const currentTurns =
+                          activeLang === 'en'
+                            ? (translationsByCall[callUuid]?.en || entry.transcripts_en || entry.turns || [])
+                            : activeLang === 'hi'
+                            ? (translationsByCall[callUuid]?.hi || entry.transcripts_hi || entry.turns || [])
+                            : (entry.turns || []);
+                        const isTranslating = translatingCallId === `${callUuid}-${activeLang}`;
+                        const isAudioTranscribing = translatingCallId === `${callUuid}-${activeLang}-audio`;
+                        const err = translationError[callUuid];
 
-                                {turnsCount > 0 ? (
-                                  <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                                    {entry.turns.map((t, idx) => {
-                                      const isAgent = t.role === 'agent';
-                                      return (
-                                        <div
-                                          key={idx}
-                                          className={`flex flex-col ${isAgent ? 'items-start' : 'items-end'}`}
+                        return (
+                          <tr className="bg-slate-50/70 border-b border-slate-200">
+                            <td colSpan={9} className="p-3.5">
+                              {isTranscriptOpen && (
+                                <div className="bg-white border border-slate-200 p-3 space-y-2 mb-2.5">
+                                  {/* Transcript Header with Language Switch & Actions */}
+                                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-200 text-xs">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-bold text-slate-800 uppercase tracking-wider">
+                                        Dialog Transcript ({currentTurns.length} turns)
+                                      </span>
+                                      <span className="text-[10px] text-slate-400 font-mono">
+                                        #{shortUuid}
+                                      </span>
+                                      {activeLang !== 'orig' && (
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
+                                          <Check className="w-2.5 h-2.5" />
+                                          {translationsByCall[callUuid]?.[`${activeLang}_source`] === 'audio' ? '🎧 Audio: ' : ''}
+                                          {activeLang === 'en' ? 'English' : 'Hindi'} {translationsByCall[callUuid]?.[`${activeLang}_source`] === 'audio' ? 'Transcribed' : 'Translation'}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      {/* Text View Switch Buttons */}
+                                      <div className="inline-flex items-center bg-slate-100 p-0.5 border border-slate-200 text-xs">
+                                        <span className="px-1.5 text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1">
+                                          <Languages className="w-3 h-3 text-slate-500" />
+                                          View:
+                                        </span>
+                                        <button
+                                          onClick={() => handleSwitchLanguage(callUuid, 'orig')}
+                                          className={`px-2 py-0.5 text-[11px] font-semibold transition cursor-pointer ${
+                                            activeLang === 'orig'
+                                              ? 'bg-white text-slate-900 shadow-xs'
+                                              : 'text-slate-600 hover:text-slate-900'
+                                          }`}
                                         >
-                                          <div className="flex items-center gap-1 text-[10px] text-slate-400 mb-0.5 px-1 font-semibold uppercase">
-                                            {isAgent ? <Bot className="w-3 h-3 text-[#008792]" /> : <User className="w-3 h-3 text-emerald-600" />}
-                                            <span>{isAgent ? 'Ananya (Voice AI)' : 'Customer'}</span>
-                                          </div>
-                                          <div
-                                            className={`max-w-[85%] px-3 py-1.5 text-xs leading-relaxed ${
-                                              isAgent
-                                                ? 'bg-[#008792]/10 text-teal-950 border border-[#008792]/20'
-                                                : 'bg-white text-slate-900 border border-slate-200'
+                                          Original (Telugu)
+                                        </button>
+                                        <button
+                                          onClick={() => handleSwitchLanguage(callUuid, 'en', entry.turns)}
+                                          className={`px-2 py-0.5 text-[11px] font-semibold transition flex items-center gap-1 cursor-pointer ${
+                                            activeLang === 'en'
+                                              ? 'bg-[#008792] text-white shadow-xs'
+                                              : 'text-slate-600 hover:text-slate-900'
+                                          }`}
+                                          title="Translate current transcript to English"
+                                        >
+                                          <span>English</span>
+                                          {translatingCallId === `${callUuid}-en` && <RefreshCw className="w-2.5 h-2.5 animate-spin" />}
+                                        </button>
+                                        <button
+                                          onClick={() => handleSwitchLanguage(callUuid, 'hi', entry.turns)}
+                                          className={`px-2 py-0.5 text-[11px] font-semibold transition flex items-center gap-1 cursor-pointer ${
+                                            activeLang === 'hi'
+                                              ? 'bg-[#008792] text-white shadow-xs'
+                                              : 'text-slate-600 hover:text-slate-900'
+                                          }`}
+                                          title="Translate current transcript to Hindi"
+                                        >
+                                          <span>Hindi</span>
+                                          {translatingCallId === `${callUuid}-hi` && <RefreshCw className="w-2.5 h-2.5 animate-spin" />}
+                                        </button>
+                                      </div>
+
+                                      {/* Direct Audio Re-transcribe Options (English / Hindi) */}
+                                      {(recUrl || (durationSec > 5 && (inBytes > 0 || outBytes > 0))) && (
+                                        <div className="inline-flex items-center bg-emerald-50/90 p-0.5 border border-emerald-300 text-xs">
+                                          <span className="px-1.5 text-[10px] font-bold text-emerald-800 uppercase flex items-center gap-1">
+                                            <Headphones className="w-3 h-3 text-emerald-700" />
+                                            Re-transcribe Audio:
+                                          </span>
+                                          <button
+                                            onClick={() => handleReTranscribeFromAudio(callUuid, 'en')}
+                                            disabled={translatingCallId === `${callUuid}-en-audio`}
+                                            className={`px-2 py-0.5 text-[11px] font-semibold transition cursor-pointer flex items-center gap-1 ${
+                                              activeLang === 'en' && translationsByCall[callUuid]?.['en_source'] === 'audio'
+                                                ? 'bg-emerald-700 text-white shadow-xs'
+                                                : 'bg-white text-emerald-900 hover:bg-emerald-600 hover:text-white border border-emerald-200'
                                             }`}
+                                            title="Listen to call audio recording and re-transcribe directly into English"
                                           >
-                                            {t.text}
+                                            <span>English</span>
+                                            {translatingCallId === `${callUuid}-en-audio` && <RefreshCw className="w-2.5 h-2.5 animate-spin" />}
+                                          </button>
+                                          <button
+                                            onClick={() => handleReTranscribeFromAudio(callUuid, 'hi')}
+                                            disabled={translatingCallId === `${callUuid}-hi-audio`}
+                                            className={`px-2 py-0.5 text-[11px] font-semibold transition cursor-pointer flex items-center gap-1 ml-0.5 ${
+                                              activeLang === 'hi' && translationsByCall[callUuid]?.['hi_source'] === 'audio'
+                                                ? 'bg-emerald-700 text-white shadow-xs'
+                                                : 'bg-white text-emerald-900 hover:bg-emerald-600 hover:text-white border border-emerald-200'
+                                            }`}
+                                            title="Listen to call audio recording and re-transcribe directly into Hindi"
+                                          >
+                                            <span>Hindi</span>
+                                            {translatingCallId === `${callUuid}-hi-audio` && <RefreshCw className="w-2.5 h-2.5 animate-spin" />}
+                                          </button>
+                                        </div>
+                                      )}
+
+                                      {/* Direct Audio Download */}
+                                      {(recUrl || (durationSec > 5 && (inBytes > 0 || outBytes > 0))) && (
+                                        <a
+                                          href={`/api/recording/${encodeURIComponent(callUuid)}?download=1`}
+                                          download={`recording-${displayPhone || shortUuid}.mp3`}
+                                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 transition cursor-pointer"
+                                          title="Download Call Recording (.mp3)"
+                                        >
+                                          <Download className="w-3 h-3 text-[#008792]" />
+                                          <span>Audio (.mp3)</span>
+                                        </a>
+                                      )}
+
+                                      {/* Export Transcript */}
+                                      {currentTurns.length > 0 && (
+                                        <button
+                                          onClick={() => handleDownloadTranscriptTxt(callUuid, displayPhone, currentTurns, activeLang)}
+                                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 transition cursor-pointer"
+                                          title="Download Transcript as Text (.txt)"
+                                        >
+                                          <FileText className="w-3 h-3 text-slate-500" />
+                                          <span>Export (.txt)</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Translation / Audio Transcription Loading State */}
+                                  {isAudioTranscribing ? (
+                                    <div className="text-center py-8 bg-emerald-50/50 border border-dashed border-emerald-300">
+                                      <RefreshCw className="w-5 h-5 animate-spin text-emerald-600 mx-auto mb-2" />
+                                      <p className="text-xs font-semibold text-emerald-900">
+                                        Listening to call audio recording and re-transcribing with Gemini Multimodal AI...
+                                      </p>
+                                      <p className="text-[11px] text-emerald-700 mt-0.5">
+                                        Analyzing speech waveform directly to capture all customer and agent dialogue.
+                                      </p>
+                                    </div>
+                                  ) : isTranslating ? (
+                                    <div className="text-center py-8 bg-slate-50 border border-dashed border-slate-200">
+                                      <RefreshCw className="w-5 h-5 animate-spin text-[#008792] mx-auto mb-2" />
+                                      <p className="text-xs font-semibold text-slate-700">
+                                        Converting &amp; Translating conversation to {activeLang === 'en' ? 'English' : 'Hindi'} with Gemini AI...
+                                      </p>
+                                      <p className="text-[11px] text-slate-400 mt-0.5">
+                                        Generating natural dialogue translation with speaker diarization.
+                                      </p>
+                                    </div>
+                                  ) : err ? (
+                                    <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+                                      <p className="font-semibold">Translation Error</p>
+                                      <p className="text-[11px] mt-0.5">{err}</p>
+                                      <button
+                                        onClick={() => handleSwitchLanguage(callUuid, activeLang, entry.turns)}
+                                        className="mt-2 text-xs font-bold text-rose-800 underline cursor-pointer"
+                                      >
+                                        Retry Translation
+                                      </button>
+                                    </div>
+                                  ) : currentTurns.length > 0 ? (
+                                    <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                                      {currentTurns.map((t, idx) => {
+                                        const isAgent = t.role === 'agent';
+                                        return (
+                                          <div
+                                            key={idx}
+                                            className={`flex flex-col ${isAgent ? 'items-start' : 'items-end'}`}
+                                          >
+                                            <div className="flex items-center gap-1 text-[10px] text-slate-400 mb-0.5 px-1 font-semibold uppercase">
+                                              {isAgent ? <Bot className="w-3 h-3 text-[#008792]" /> : <User className="w-3 h-3 text-emerald-600" />}
+                                              <span>{isAgent ? 'Ananya (Voice AI)' : 'Customer'}</span>
+                                            </div>
+                                            <div
+                                              className={`max-w-[85%] px-3 py-1.5 text-xs leading-relaxed ${
+                                                isAgent
+                                                  ? 'bg-[#008792]/10 text-teal-950 border border-[#008792]/20'
+                                                  : 'bg-white text-slate-900 border border-slate-200'
+                                              }`}
+                                            >
+                                              {cleanTurnText(t.text, activeLang)}
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  ) : (
+                                    <div className="text-center py-5 bg-slate-50/60 border border-slate-200 px-4">
+                                      <p className="text-xs text-slate-600 font-medium">No live dialog turns recorded during call.</p>
+                                      {(recUrl || (durationSec > 5 && (inBytes > 0 || outBytes > 0))) ? (
+                                        <div className="mt-2">
+                                          <p className="text-[11px] text-slate-400 mb-2">
+                                            Call recording is available. You can convert the audio recording directly into an English or Hindi transcript:
+                                          </p>
+                                          <div className="inline-flex items-center gap-2">
+                                            <button
+                                              onClick={() => handleSwitchLanguage(callUuid, 'en', [])}
+                                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#008792] text-white hover:bg-[#007680] transition cursor-pointer"
+                                            >
+                                              <Languages className="w-3.5 h-3.5" />
+                                              <span>Convert Audio to English</span>
+                                            </button>
+                                            <button
+                                              onClick={() => handleSwitchLanguage(callUuid, 'hi', [])}
+                                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white border border-[#008792] text-[#008792] hover:bg-[#008792]/5 transition cursor-pointer"
+                                            >
+                                              <Languages className="w-3.5 h-3.5" />
+                                              <span>Convert Audio to Hindi</span>
+                                            </button>
                                           </div>
                                         </div>
-                                      );
-                                    })}
-                                  </div>
-                                ) : (
-                                  <p className="text-xs text-slate-400 text-center py-2">
-                                    No dialog turns recorded.
-                                  </p>
-                                )}
-                              </div>
-                            )}
+                                      ) : (
+                                        <p className="text-[11px] text-slate-400 mt-1">No audio recording available for this call.</p>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
 
                             {isTimelineOpen && (
                               <div className="bg-white border border-slate-200 p-3">
@@ -862,7 +1186,8 @@ export default function BatchesTab({
                             )}
                           </td>
                         </tr>
-                      )}
+                      );
+                    })()}
                     </React.Fragment>
                   );
                 })

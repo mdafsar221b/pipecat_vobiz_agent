@@ -88,7 +88,7 @@ export default function CampaignController({
     }));
 
     const now = new Date();
-    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const timeStr = now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true }).replace(/\u202f/g, ' ');
     const batchName = `Test Batch (${timeStr}) - ${leads.length} calls`;
 
     setIsQueueingBatch(true);

@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Filter,
 } from 'lucide-react';
+import { formatTime } from '../utils/formatters';
 
 // Pending missed calls list from CRM with AI disposition tracking and dialer queue actions
 export default function PendingCallsTab({
@@ -694,12 +695,7 @@ export default function PendingCallsTab({
               </tr>
             ) : (
               filteredCalls.map((c, idx) => {
-                const timeStr = c.createdAt
-                  ? new Date(c.createdAt).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })
-                  : '--';
+                const timeStr = c.createdAt ? formatTime(c.createdAt) : '--';
                 const isChecked = !deselectedPhones.has(c.phone_number);
 
                 return (

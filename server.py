@@ -406,7 +406,7 @@ async def delete_campaign_batch(batch_id: str):
 
 # Proxy authenticated audio recording from Vobiz
 @app.get("/api/recording/{call_uuid}")
-async def get_recording(call_uuid: str):
+async def get_recording(call_uuid: str, download: Optional[int] = 0):
     doc = db.get_call(call_uuid)
     rec_url = doc.get("recording_url") if doc else None
 
@@ -436,14 +436,304 @@ async def get_recording(call_uuid: str):
             if resp.status_code != 200:
                 logger.warning(f"Recording fetch returned {resp.status_code} for {rec_url}")
                 return Response(content="Recording not available from provider", status_code=502)
+
+            headers = {"Accept-Ranges": "bytes"}
+            if download:
+                phone = (doc.get("phone_number") or "").replace("+", "")
+                filename = f"recording_{phone}_{call_uuid[:8]}.mp3" if phone else f"recording_{call_uuid[:8]}.mp3"
+                headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+
             return Response(
                 content=resp.content,
                 media_type=resp.headers.get("content-type", "audio/mpeg"),
-                headers={"Accept-Ranges": "bytes"},
+                headers=headers,
             )
     except Exception as exc:
         logger.error(f"Failed to fetch recording {rec_url}: {exc}")
         return Response(content="Failed to retrieve recording", status_code=502)
+
+def clean_translation_turns(turns: List[Dict[str, Any]], lang_code: str) -> List[Dict[str, Any]]:
+    import re
+    cleaned = []
+    has_telugu = lambda s: any("\u0C00" <= ch <= "\u0C7F" for ch in s)
+    has_devanagari = lambda s: any("\u0900" <= ch <= "\u097F" for ch in s)
+
+    for t in turns:
+        text = str(t.get("text", "")).strip()
+        role = t.get("role", "customer")
+
+        if lang_code == "en":
+            if has_telugu(text):
+                # If text is e.g. "నమస్తే... (Hello...)" extract text inside parentheses
+                parenthetical_match = re.search(r"\(([^)]+)\)", text)
+                if parenthetical_match:
+                    candidate = parenthetical_match.group(1).strip()
+                    if not has_telugu(candidate) and any(c.isalpha() for c in candidate):
+                        text = candidate
+                if has_telugu(text):
+                    # Strip out all Telugu unicode blocks
+                    no_telugu = re.sub(r"[\u0C00-\u0C7F]+", "", text).strip()
+                    no_telugu = re.sub(r"^[()\-:\s\.\,]+|[()\-:\s\.\,]+$", "", no_telugu).strip()
+                    if no_telugu and any(c.isalpha() for c in no_telugu):
+                        text = no_telugu
+        elif lang_code == "hi":
+            if has_telugu(text) and has_devanagari(text):
+                parenthetical_match = re.search(r"\(([^)]+)\)", text)
+                if parenthetical_match:
+                    candidate = parenthetical_match.group(1).strip()
+                    if has_devanagari(candidate) and not has_telugu(candidate):
+                        text = candidate
+                if has_telugu(text):
+                    no_telugu = re.sub(r"[\u0C00-\u0C7F]+", "", text).strip()
+                    no_telugu = re.sub(r"^[()\-:\s\.\,]+|[()\-:\s\.\,]+$", "", no_telugu).strip()
+                    if no_telugu and has_devanagari(no_telugu):
+                        text = no_telugu
+
+        cleaned.append({"role": role, "text": text.strip()})
+    return cleaned
+
+# Convert / translate call transcript or recording to English or Hindi using Gemini AI
+@app.api_route("/api/calls/{call_uuid}/translate", methods=["GET", "POST"])
+async def translate_call_transcript(call_uuid: str, request: Request):
+    lang = "en"
+    force_audio = False
+    if request.method == "POST":
+        try:
+            body = await request.json()
+            lang = body.get("language") or body.get("lang") or "en"
+            force_audio = bool(body.get("force_audio") or body.get("force") or False)
+        except Exception:
+            params = dict(request.query_params)
+            lang = params.get("language") or params.get("lang") or "en"
+            force_audio = params.get("force_audio") in ("1", "true", "True")
+    else:
+        params = dict(request.query_params)
+        lang = params.get("language") or params.get("lang") or "en"
+        force_audio = params.get("force_audio") in ("1", "true", "True")
+
+    raw_lang = str(lang).lower().strip()
+    if raw_lang in ("orig", "original", "telugu"):
+        lang_code = "orig"
+        lang_name = "Original Spoken Language"
+    elif raw_lang in ("hi", "hindi"):
+        lang_code = "hi"
+        lang_name = "Hindi"
+    else:
+        lang_code = "en"
+        lang_name = "English"
+
+    doc = db.get_call(call_uuid)
+    if not doc:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Call record not found"})
+
+    cache_field = "transcripts" if lang_code == "orig" else f"transcripts_{lang_code}"
+    # If not forcing audio re-transcription, check cache first
+    if not force_audio and doc.get(cache_field) and len(doc[cache_field]) > 0:
+        cleaned_cached = clean_translation_turns(doc[cache_field], lang_code)
+        return {
+            "ok": True,
+            "call_uuid": call_uuid,
+            "language": lang_code,
+            "language_name": lang_name,
+            "turns": cleaned_cached,
+            "cached": True,
+            "source": "cache",
+        }
+
+    turns = doc.get("turns") or doc.get("transcripts") or []
+
+    # If force_audio requested OR no text turns exist, fetch audio recording
+    audio_bytes = None
+    if force_audio or not turns:
+        rec_url = doc.get("recording_url")
+        if not rec_url:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    api_url = f"{vobiz_api.API_BASE}/Account/{vobiz_api.AUTH_ID}/Recording/?call_uuid={call_uuid}"
+                    r = await client.get(api_url, headers=vobiz_api.get_headers())
+                    if r.status_code == 200:
+                        objs = r.json().get("objects", [])
+                        if objs:
+                            rec_url = objs[0].get("recording_url") or objs[0].get("url")
+                            if rec_url:
+                                db.update_call(call_uuid, {"recording_url": rec_url})
+            except Exception as e:
+                logger.warning(f"Failed to lookup recording for translation: {e}")
+
+        if rec_url:
+            try:
+                async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                    resp = await client.get(rec_url, headers=vobiz_api.get_headers())
+                    if resp.status_code == 200:
+                        audio_bytes = resp.content
+            except Exception as e:
+                logger.warning(f"Failed to download audio for translation: {e}")
+
+    # If force_audio was explicitly requested but audio recording is not available
+    if force_audio and not audio_bytes:
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "error": "No call audio recording is available from the carrier to re-transcribe."},
+        )
+
+    if not turns and not audio_bytes:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": "No conversation turns or audio recording found for this call to convert."},
+        )
+
+    # Call Gemini to translate turns or audio recording
+    from google.genai import Client, types
+    import agent
+    import re
+
+    translated_turns = []
+    last_err = ""
+    attempts = len(agent.GEMINI_API_KEYS) or 1
+    used_source = "audio" if (force_audio or (audio_bytes and not turns)) else "transcript"
+
+    for attempt in range(attempts):
+        api_key = agent.get_gemini_api_key()
+        try:
+            client = Client(api_key=api_key)
+            if used_source == "audio":
+                # Audio-based transcription directly from call audio
+                if lang_code == "en":
+                    prompt = (
+                        "You are an expert audio transcriber and translator for real estate customer phone calls.\n"
+                        "Listen carefully to this entire phone call audio recording from start to finish.\n"
+                        "STRICT MANDATORY RULES:\n"
+                        "1. TRANSLATE COMPLETELY INTO 100% PURE ENGLISH ONLY.\n"
+                        "2. NEVER output any Telugu script characters (న, మ, etc.). No bilingual parentheses like 'Telugu (English)'. Replace all Telugu text entirely with natural English.\n"
+                        "3. CAPTURE EVERY SINGLE SPOKEN UTTERANCE: Listen closely to everything spoken by both Ananya and the Customer, including questions, complaints, arguments, hesitation, or greetings.\n"
+                        "4. SPEAKER LABELS: Identify each speaker as either 'agent' (Ananya) or 'customer'.\n"
+                        "5. OUTPUT FORMAT: Return ONLY a valid JSON array of objects with keys 'role' and 'text'.\n"
+                        "Format example:\n"
+                        "[\n"
+                        '  {"role": "agent", "text": "Hello, I am Ananya speaking from Swargaseema. You gave us a missed call. Are you interested in Swargaseema projects?"},\n'
+                        '  {"role": "customer", "text": "Tell me. Yes, I am interested. Hello? Hello?"}\n'
+                        "]\n"
+                        "No markdown formatting, no explanations."
+                    )
+                elif lang_code == "hi":
+                    prompt = (
+                        "You are an expert audio transcriber and translator for real estate customer phone calls.\n"
+                        "Listen carefully to this entire phone call audio recording from start to finish.\n"
+                        "STRICT MANDATORY RULES:\n"
+                        "1. TRANSLATE COMPLETELY INTO 100% PURE HINDI (in Devanagari script) ONLY.\n"
+                        "2. NEVER output any Telugu script characters (న, మ, etc.). No bilingual parentheses. Replace all dialogue completely with natural Hindi.\n"
+                        "3. CAPTURE EVERY SINGLE SPOKEN UTTERANCE: Listen closely to everything spoken by both Ananya and the Customer.\n"
+                        "4. SPEAKER LABELS: Identify each speaker as either 'agent' (Ananya) or 'customer'.\n"
+                        "5. OUTPUT FORMAT: Return ONLY a valid JSON array of objects with keys 'role' and 'text'.\n"
+                        "Format example:\n"
+                        "[\n"
+                        '  {"role": "agent", "text": "नमस्ते, मैं स्वर्गसीमा से अनन्या बात कर रही हूँ। आपने हमें मिस्ड कॉल किया था। क्या आप स्वर्गसीमा प्रोजेक्ट्स में रुचि रखते हैं?"},\n'
+                        '  {"role": "customer", "text": "बताइए। हाँ, मुझे दिलचस्पी है।"}\n'
+                        "]\n"
+                        "No markdown formatting, no explanations."
+                    )
+                else:
+                    prompt = (
+                        "Listen carefully to this entire phone call recording between Swargaseema Voice AI Ananya and a customer.\n"
+                        "Transcribe every turn of the conversation in the exact language spoken (primarily Telugu/Hindi/English).\n"
+                        "Do not skip any words spoken by the customer or the agent, even if faint, brief, or interrupted.\n"
+                        "Identify and label each speaker as either 'agent' (Ananya) or 'customer'.\n"
+                        "Return ONLY a valid JSON array of objects with keys 'role' and 'text'. No markdown code fences, no extra commentary.\n"
+                        "Format example:\n"
+                        '[{"role": "agent", "text": "నమస్తే అండి..."}, {"role": "customer", "text": "హలో..."}]'
+                    )
+
+                res = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[
+                        types.Part.from_bytes(data=audio_bytes, mime_type="audio/mp3"),
+                        prompt,
+                    ],
+                )
+                raw = res.text.strip()
+                match = re.search(r"\[\s*\{.*\}\s*\]", raw, re.DOTALL)
+                if match:
+                    translated_turns = json.loads(match.group(0))
+                else:
+                    translated_turns = json.loads(raw)
+                break
+            else:
+                if lang_code == "en":
+                    prompt = (
+                        "You are an expert real estate dialogue translator.\n"
+                        "Translate the following phone call conversation turns between Ananya (Voice AI) and a Customer into 100% PURE ENGLISH ONLY.\n"
+                        "STRICT RULES:\n"
+                        "1. Output must be 100% PURE ENGLISH ONLY. DO NOT include any Telugu words, Telugu script (న, మ, etc.), or bilingual parentheses like 'Telugu (English)'.\n"
+                        "2. Replace the text completely with natural, fluent English.\n"
+                        "3. Preserve exact speaker roles ('agent' and 'customer').\n"
+                        "4. Return ONLY a valid JSON array of objects with keys 'role' and 'text'.\n"
+                        "Format example:\n"
+                        '[{"role": "agent", "text": "Hello, I am Ananya speaking from Swargaseema..."}, {"role": "customer", "text": "Yes, I am interested."}]\n\n'
+                        f"Original dialogue to translate:\n"
+                        f"{json.dumps(turns, ensure_ascii=False)}"
+                    )
+                elif lang_code == "hi":
+                    prompt = (
+                        "You are an expert real estate dialogue translator.\n"
+                        "Translate the following phone call conversation turns between Ananya (Voice AI) and a Customer into 100% PURE HINDI (Devanagari script) ONLY.\n"
+                        "STRICT RULES:\n"
+                        "1. Output must be 100% PURE HINDI ONLY. DO NOT include any Telugu words, Telugu script (న, మ, etc.), or bilingual mixture.\n"
+                        "2. Replace the text completely with natural, fluent Hindi.\n"
+                        "3. Preserve exact speaker roles ('agent' and 'customer').\n"
+                        "4. Return ONLY a valid JSON array of objects with keys 'role' and 'text'.\n"
+                        "Format example:\n"
+                        '[{"role": "agent", "text": "नमस्ते, मैं अनन्या..."}, {"role": "customer", "text": "हाँ, मैं इच्छुक हूँ।"}]\n\n'
+                        f"Original dialogue to translate:\n"
+                        f"{json.dumps(turns, ensure_ascii=False)}"
+                    )
+                else:
+                    prompt = (
+                        f"You are an expert real estate multilingual translation assistant.\n"
+                        f"Format the following phone call turns into a valid JSON array:\n"
+                        f"{json.dumps(turns, ensure_ascii=False)}"
+                    )
+
+                res = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                )
+                raw = res.text.strip()
+                match = re.search(r"\[\s*\{.*\}\s*\]", raw, re.DOTALL)
+                if match:
+                    translated_turns = json.loads(match.group(0))
+                else:
+                    translated_turns = json.loads(raw)
+                break
+        except Exception as exc:
+            last_err = str(exc)
+            logger.warning(f"Translation attempt {attempt+1} failed: {exc}")
+            agent.rotate_gemini_api_key(f"Translation failure: {exc}")
+
+    if not translated_turns:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": f"Failed to translate conversation: {last_err}"},
+        )
+
+    # Clean translated turns to ensure 100% pure target language without leftover Telugu text
+    translated_turns = clean_translation_turns(translated_turns, lang_code)
+
+    # Cache translated turns in MongoDB under their dedicated language field (never overwrite original live transcript with translations)
+    if lang_code == "orig":
+        if used_source == "audio" or not turns:
+            db.update_call(call_uuid, {"transcripts": translated_turns})
+    else:
+        db.update_call(call_uuid, {cache_field: translated_turns})
+
+    return {
+        "ok": True,
+        "call_uuid": call_uuid,
+        "language": lang_code,
+        "language_name": lang_name,
+        "turns": translated_turns,
+        "source": used_source,
+        "cached": False,
+    }
 
 # Retrieve recent call history and transcripts with optional date range
 @app.get("/calls")

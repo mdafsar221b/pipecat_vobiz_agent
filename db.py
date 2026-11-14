@@ -344,6 +344,8 @@ def get_call(call_uuid: str) -> Optional[Dict[str, Any]]:
             doc = col.find_one({"call_uuid": call_uuid}, {"_id": 0})
             if doc:
                 doc["turns"] = doc.get("transcripts", [])
+                doc["transcripts_en"] = doc.get("transcripts_en", [])
+                doc["transcripts_hi"] = doc.get("transcripts_hi", [])
                 doc["duration"] = doc.get("duration_seconds", 0) or 0
                 doc["started"] = doc.get("created_at", "")
                 doc["ended"] = doc.get("ended_at", "")
@@ -379,6 +381,8 @@ def get_recent_calls(
             calls = list(cursor)
             for c in calls:
                 c["turns"] = c.get("transcripts", [])
+                c["transcripts_en"] = c.get("transcripts_en", [])
+                c["transcripts_hi"] = c.get("transcripts_hi", [])
                 c["duration"] = c.get("duration_seconds", 0) or 0
                 c["started"] = c.get("created_at", "")
                 c["ended"] = c.get("ended_at", "")
@@ -482,6 +486,8 @@ def get_batch_detail(batch_id: str) -> Dict[str, Any]:
             cursor = c_col.find({"batch_id": batch_id}, {"_id": 0}).sort("created_at", DESCENDING)
             for c in cursor:
                 c["turns"] = c.get("transcripts", [])
+                c["transcripts_en"] = c.get("transcripts_en", [])
+                c["transcripts_hi"] = c.get("transcripts_hi", [])
                 c["duration"] = c.get("duration_seconds", 0) or 0
                 c["started"] = c.get("created_at", "")
                 c["ended"] = c.get("ended_at", "")

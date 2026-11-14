@@ -1,6 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { Radio, Clock, Bot, User, PhoneCall } from 'lucide-react';
-import { getDispositionConfig } from '../utils/formatters';
+import { getDispositionConfig, formatTime } from '../utils/formatters';
 
 // Nugget Voice AI Real-Time Telephony & Audio Stream Monitor
 export default function LiveCallHud({ activeCall, lastCompletedCall }) {
@@ -167,7 +167,7 @@ export default function LiveCallHud({ activeCall, lastCompletedCall }) {
             {lc.phone_number || 'Completed Session'}
           </div>
           <span className="text-[11px] text-slate-400 font-mono">
-            {lc.ended_at ? new Date(lc.ended_at * 1000).toLocaleTimeString() : ''}
+            {lc.ended_at ? formatTime(lc.ended_at) : ''}
           </span>
         </div>
 
