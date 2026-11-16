@@ -1,7 +1,13 @@
 import asyncio
 import json
+import time
 from typing import Callable, Optional
 from loguru import logger
+import sys
+from pathlib import Path
+BACKEND_DIR = Path(__file__).resolve().parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 import diagnostics
 
 from pipecat.frames.frames import AudioRawFrame, Frame, InputAudioRawFrame, InterruptionFrame
@@ -31,6 +37,7 @@ class VobizFrameSerializer(BaseVobizFrameSerializer):
         self.is_greeting_playing = False
         self.greeting_inbound_buffer = bytearray()
         self.on_inbound_audio: Optional[Callable[[bytes], None]] = None
+        self.agent_speaking_started_at: float = 0.0
 
     # Set call identifiers dynamically
     def set_call_identifiers(self, call_uuid: str, stream_id: Optional[str] = None) -> None:
@@ -38,11 +45,18 @@ class VobizFrameSerializer(BaseVobizFrameSerializer):
         if stream_id:
             self._stream_id = stream_id
 
-    # Serialize frames to Vobiz JSON with outbound audio diagnostic tracking
+    # Serialize frames to Vobiz JSON with echo suppression and audio tracking
     async def serialize(self, frame: Frame) -> str | bytes | None:
-        if isinstance(frame, InterruptionFrame) and self.is_greeting_playing:
-            return None
+        if isinstance(frame, InterruptionFrame):
+            if self.is_greeting_playing:
+                return None
+            if self.agent_speaking_started_at > 0 and (time.time() - self.agent_speaking_started_at < 1.0):
+                return None
+            self.agent_speaking_started_at = 0.0
+            return await super().serialize(frame)
         if isinstance(frame, AudioRawFrame):
+            if self.agent_speaking_started_at == 0.0:
+                self.agent_speaking_started_at = time.time()
             data = frame.audio
             if data and self._call_id:
                 diagnostics.get_tracer(self._call_id).record_audio_out(

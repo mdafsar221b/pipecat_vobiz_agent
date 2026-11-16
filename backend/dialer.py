@@ -7,11 +7,16 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from loguru import logger
 
+import sys
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+BACKEND_DIR = Path(__file__).resolve().parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
 import db
 import diagnostics
 import vobiz_api
-
-BASE_DIR = Path(__file__).parent
 
 class OutboundDialer:
     """Manages the outbound call queue, OBD campaign execution, and live call tracking."""
@@ -26,6 +31,7 @@ class OutboundDialer:
         self.batches: List[Dict[str, Any]] = []
         self.current_batch_id: Optional[str] = None
         self.total_batch_leads: int = 0
+        self.selected_template_id: str = "production_callback_conversion"
 
     # Enrich each CRM lead with latest AI voice agent disposition
     def _enrich_with_ai_disposition(self, calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -66,10 +72,10 @@ class OutboundDialer:
             logger.warning(f"Native MongoDB CRM fetch failed: {exc}")
 
         # 2. Fallback: Node crm_service.cjs (if local realestate workflow exists)
-        script_path = BASE_DIR / "crm_service.cjs"
+        script_path = BACKEND_DIR / "crm_service.cjs"
         cmd = ["node", str(script_path), start_date or "", end_date or "", status or "all"]
         try:
-            res = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True, text=True, timeout=25)
+            res = subprocess.run(cmd, cwd=str(BACKEND_DIR), capture_output=True, text=True, timeout=25)
             if res.returncode == 0 and res.stdout.strip():
                 data = json.loads(res.stdout.strip())
                 calls = data.get("calls", []) if isinstance(data, dict) else data
@@ -85,10 +91,14 @@ class OutboundDialer:
         leads: List[Dict[str, Any]],
         batch_name: Optional[str] = None,
         source_filter: Optional[str] = None,
+        template_id: Optional[str] = None,
     ) -> str:
         batch_id = f"BATCH-{datetime_now_str()}"
         self.current_batch_id = batch_id
         self.queue.clear()
+
+        effective_template_id = template_id or self.selected_template_id
+        tpl = db.get_template(effective_template_id)
 
         for lead in leads:
             entry = {
@@ -107,15 +117,71 @@ class OutboundDialer:
             "batch_id": batch_id,
             "name": batch_name or f"Batch {time.strftime('%Y-%m-%d %H:%M')}",
             "source_filter": source_filter or "CRM Missed Calls",
+            "template_id": effective_template_id,
+            "template_name": (tpl.get("name") if tpl else effective_template_id) or "Standard",
+            "greeting_text": tpl.get("greeting_telugu") if tpl else None,
+            "system_prompt": tpl.get("system_prompt") if tpl else None,
+            "greeting_audio_path": tpl.get("greeting_audio_path") if tpl else None,
             "total_leads": len(self.queue),
+            "leads": [dict(l) for l in leads],
             "status": "active",
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "started_at": time.time(),
         }
         db.save_batch(batch_doc)
         self.total_batch_leads = len(self.queue)
-        logger.info(f"Queued {len(self.queue)} leads into batch {batch_id}")
+        logger.info(f"Queued {len(self.queue)} leads into batch {batch_id} (Template: {effective_template_id})")
         return batch_id
+
+    # Re-run a previous batch by re-queueing its leads
+    def rerun_batch(self, batch_id: str, mode: str = "all") -> Dict[str, Any]:
+        b_col = db.get_batches_collection()
+        c_col = db.get_collection()
+        batch_doc = b_col.find_one({"batch_id": batch_id}) if b_col is not None else None
+
+        leads_to_queue = []
+
+        # Primary: use saved leads list from batch document
+        if batch_doc and batch_doc.get("leads"):
+            saved = batch_doc["leads"]
+            if mode == "unreached" and c_col is not None:
+                reached_nums = set()
+                for c in c_col.find({"batch_id": batch_id, "disposition": {"$in": ["interested", "inquiry_drop"]}}):
+                    if c.get("phone_number"):
+                        reached_nums.add(c["phone_number"][-10:])
+                leads_to_queue = [l for l in saved if str(l.get("phone_number", ""))[-10:] not in reached_nums]
+            else:
+                leads_to_queue = list(saved)
+
+        # Fallback: reconstruct from call records in database
+        if not leads_to_queue and c_col is not None:
+            for c in c_col.find({"batch_id": batch_id}).sort("created_at", 1):
+                disp = c.get("disposition")
+                if mode == "unreached" and disp in ("interested", "inquiry_drop"):
+                    continue
+                num = c.get("phone_number")
+                if num:
+                    leads_to_queue.append({
+                        "id": str(time.time()),
+                        "phone_number": num,
+                        "customer_name": c.get("customer_name") or "",
+                        "source": f"Re-run of {batch_id}",
+                    })
+
+        if not leads_to_queue:
+            return {"ok": False, "error": f"No leads found to re-run for batch {batch_id}"}
+
+        orig_name = (batch_doc.get("name") if batch_doc else batch_id) or "Batch"
+        clean_name = orig_name.replace("Re-run (", "").rstrip(")")
+        new_name = f"Re-run ({clean_name})"
+        orig_template_id = batch_doc.get("template_id") if batch_doc else None
+        new_batch_id = self.queue_leads(
+            leads=leads_to_queue,
+            batch_name=new_name,
+            source_filter=f"Re-run of {batch_id}",
+            template_id=orig_template_id,
+        )
+        return {"ok": True, "batch_id": new_batch_id, "queued": len(leads_to_queue), "name": new_name}
 
     # Check and clear stuck orphan calls exceeding carrier thresholds
     def _check_watchdog(self):
@@ -190,12 +256,14 @@ class OutboundDialer:
         customer_name: str = "",
         status: str = "dialing",
         batch_id: Optional[str] = None,
+        template_id: Optional[str] = None,
     ):
         self.active_call = {
             "call_uuid": call_uuid,
             "phone_number": phone_number,
             "customer_name": customer_name,
             "batch_id": batch_id or self.current_batch_id,
+            "template_id": template_id or self.selected_template_id,
             "status": status,
             "started_at": time.time(),
         }
@@ -272,7 +340,7 @@ class OutboundDialer:
             lead_name = pending_item.get("customer_name", "")
             logger.info(f"Dialer initiating call to {target_phone} (batch: {batch_id})")
 
-            call_answer_url = f"{public_url}/answer?batch_id={batch_id}&lead_id={lead_id}&to={target_phone}"
+            call_answer_url = f"{public_url}/answer?batch_id={batch_id}&lead_id={lead_id}&to={target_phone}&template_id={self.selected_template_id}"
             call_hangup_url = f"{public_url}/hangup?batch_id={batch_id}&lead_id={lead_id}&to={target_phone}"
 
             try:
@@ -289,6 +357,7 @@ class OutboundDialer:
                     customer_name=lead_name,
                     status="dialing",
                     batch_id=batch_id,
+                    template_id=self.selected_template_id,
                 )
                 tracer = diagnostics.get_tracer(call_uuid, phone_number=target_phone, batch_id=batch_id)
                 tracer.record_event("call_initiated", {
@@ -397,7 +466,23 @@ class OutboundDialer:
             "next_call": next_lead,
             "next_in_queue": next_lead,
             "did": os.getenv("FROM_NUMBER", ""),
+            "selected_template_id": self.selected_template_id,
         }
+
+    # Set active campaign template for ad-hoc dials and upcoming batches
+    def set_selected_template(self, template_id: str) -> None:
+        self.selected_template_id = template_id
+        logger.info(f"Active campaign template set to: {template_id}")
+        tpl = db.get_template(template_id)
+        if self.current_batch_id and tpl:
+            db.update_batch_template(
+                batch_id=self.current_batch_id,
+                template_id=template_id,
+                template_name=tpl.get("name", template_id),
+                greeting_text=tpl.get("greeting_telugu", ""),
+                system_prompt=tpl.get("system_prompt", ""),
+                greeting_audio_path=tpl.get("greeting_audio_path") or f"assets/greeting_{template_id}_16k.pcm",
+            )
 
 # Generate compact ISO-like timestamp string
 def datetime_now_str() -> str:

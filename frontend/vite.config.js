@@ -1,9 +1,15 @@
+import path from 'path'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-// Configure Vite with dev proxy to FastAPI server
+// Configure Vite with dev proxy to FastAPI server and shadcn path alias
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
   server: {
     port: 5173,
     proxy: {

@@ -1,11 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Menu, X } from 'lucide-react';
+import { Menu, X, Search } from 'lucide-react';
 import Sidebar from './components/Sidebar';
+import { SidebarProvider, SidebarInset, SidebarTrigger } from './components/ui/sidebar';
+import { Separator } from './components/ui/separator';
+import { Badge } from './components/ui/badge';
+import { Input } from './components/ui/input';
+import { TooltipProvider } from './components/ui/tooltip';
 import AlertBanner from './components/AlertBanner';
 import LiveConsoleView from './components/LiveConsoleView';
 import PendingCallsTab from './components/PendingCallsTab';
 import BatchesTab from './components/BatchesTab';
 import CompletedLogsTab from './components/CompletedLogsTab';
+import TemplatesTab from './components/TemplatesTab';
 import ErrorBoundary from './components/ErrorBoundary';
 
 // Main Swargaseema AI Telephony Console Application with full-width Left Sidebar Layout
@@ -13,6 +19,7 @@ export default function App() {
   const [activeNav, setActiveNav] = useState('live');
   const [alertMessage, setAlertMessage] = useState('');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [headerSearch, setHeaderSearch] = useState('');
 
   // Campaign & Live HUD State
   const [campaignData, setCampaignData] = useState({
@@ -37,6 +44,10 @@ export default function App() {
 
   const [batches, setBatches] = useState([]);
   const [isLoadingBatches, setIsLoadingBatches] = useState(false);
+
+  // Campaign Templates State
+  const [templates, setTemplates] = useState([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('production_callback_conversion');
 
   const [completedCalls, setCompletedCalls] = useState([]);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
@@ -150,8 +161,39 @@ export default function App() {
     }
   }, []);
 
+  // Fetch Campaign Strategy Templates
+  const fetchCampaignTemplates = useCallback(async () => {
+    try {
+      const res = await fetch('/api/campaign/templates');
+      if (!res.ok) return;
+      const data = await res.json();
+      setTemplates(data.templates || []);
+      if (data.selected_template_id) {
+        setSelectedTemplateId(data.selected_template_id);
+      }
+    } catch (err) {
+      console.error('Failed to load campaign templates:', err);
+    }
+  }, []);
+
+  // Select Active Template for Dialer and New Batches
+  const handleSelectTemplate = async (templateId) => {
+    setSelectedTemplateId(templateId);
+    try {
+      await fetch('/api/campaign/select-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_id: templateId }),
+      });
+      fetchCampaignStatus();
+    } catch (err) {
+      console.error('Failed to sync active template with backend:', err);
+    }
+  };
+
   // Initial Load and Adaptive Polling (1.5s when dialing/in-call, 4s when idle; pauses when tab hidden)
   useEffect(() => {
+    fetchCampaignTemplates();
     fetchCrmPendingCalls();
     fetchCampaignStatus();
     fetchCompletedLogs();
@@ -167,7 +209,7 @@ export default function App() {
     }, delay);
 
     return () => clearInterval(timer);
-  }, [fetchCampaignStatus, fetchCrmPendingCalls, fetchCompletedLogs, fetchBatches, campaignData?.status, (campaignData?.active_calls || []).length]);
+  }, [fetchCampaignTemplates, fetchCampaignStatus, fetchCrmPendingCalls, fetchCompletedLogs, fetchBatches, campaignData?.status, (campaignData?.active_calls || []).length]);
 
   // Campaign Actions
   const handleStartCampaign = async () => {
@@ -248,7 +290,11 @@ export default function App() {
       const res = await fetch('/api/dial', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: phone, contact_name: contactName }),
+        body: JSON.stringify({
+          to: phone,
+          contact_name: contactName,
+          template_id: selectedTemplateId,
+        }),
       });
       let data = {};
       try {
@@ -304,122 +350,169 @@ export default function App() {
   const activeCall = campaignData.active_calls?.[0] || null;
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-white font-sans text-slate-900 antialiased flex flex-col md:flex-row">
-      {/* Mobile Header Bar */}
-      <div className="md:hidden bg-[#0a0a0a] text-white p-3 flex items-center justify-between border-b border-neutral-800 flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 bg-[#008792] flex items-center justify-center font-bold text-white text-xs">
-            S
-          </div>
-          <span className="font-bold text-sm tracking-tight">Swargaseema Voice AI</span>
-        </div>
-        <button
-          onClick={() => setIsMobileSidebarOpen((v) => !v)}
-          className="p-1 text-neutral-400 hover:text-white"
-        >
-          {isMobileSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-        </button>
-      </div>
-
-      {/* Sidebar (Desktop fixed + Mobile drawer) */}
-      <div className={`${isMobileSidebarOpen ? 'block' : 'hidden'} md:block fixed md:static inset-y-0 left-0 z-40 h-full flex-shrink-0`}>
+    <TooltipProvider>
+      <SidebarProvider defaultOpen={true}>
         <Sidebar
           activeNav={activeNav}
-          setActiveNav={(nav) => {
-            setActiveNav(nav);
-            setIsMobileSidebarOpen(false);
-          }}
+          setActiveNav={setActiveNav}
           campaignData={campaignData}
           crmCount={crmCalls.length}
-          batchesCount={batches.length}
+          batchesCount={
+            batches.filter(
+              (b) =>
+                !b?.name?.toLowerCase().startsWith('test batch') &&
+                !b?.source_filter?.toLowerCase().includes('test')
+            ).length
+          }
           completedCount={completedCalls.length}
         />
-      </div>
 
-      {/* Main Content Workspace - Edge-to-edge slate layout */}
-      <main className="flex-1 h-screen min-w-0 p-0 flex flex-col overflow-hidden bg-white">
-        <AlertBanner alertMessage={alertMessage} />
-
-        {/* View 1: Live Monitor & Campaign Dialer */}
-        {activeNav === 'live' && (
-          <div className="flex-1 min-h-0 flex flex-col">
-            <LiveConsoleView
-              activeCall={activeCall}
-              lastCompletedCall={campaignData.last_completed_call}
-              nextCall={campaignData.next_call}
-              stats={campaignData.stats}
-              isRunning={campaignData.is_running}
-              isPaused={campaignData.is_paused}
-              activeCalls={campaignData.active_calls || []}
-              onStartCampaign={handleStartCampaign}
-              onPauseCampaign={handlePauseCampaign}
-              onResumeCampaign={handleResumeCampaign}
-              onStopCampaign={handleStopCampaign}
-              onResetQueue={handleResetQueue}
-              onRetryFailed={handleRetryFailed}
-              onTriggerManualDial={handleTriggerManualDial}
-              manualDialStatus={manualDialStatus}
-              manualDialFeedback={manualDialFeedback}
-              manualPhone={manualPhone}
-              setManualPhone={setManualPhone}
-              isDialingManual={isDialingManual}
-              onRefreshCampaign={fetchCampaignStatus}
-              onRefreshBatches={fetchBatches}
-            />
-          </div>
-        )}
-
-        {/* View 2: CRM Missed Calls */}
-        {activeNav === 'pending' && (
-          <div className="bg-white p-4 flex-1 min-h-0 overflow-y-auto">
-            <div className="mb-3">
-              <h2 className="text-base font-bold text-slate-900 tracking-tight">
-                CRM Missed Calls (Pending Queue)
-              </h2>
-              <p className="text-xs text-slate-500">
-                Filter and queue inbound missed calls from the real estate CRM into outbound campaigns
-              </p>
+        <SidebarInset className="flex flex-col h-screen overflow-hidden bg-background">
+          {/* Official shadcn Header with SidebarTrigger */}
+          <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b px-4 bg-background z-20">
+            <div className="flex items-center gap-2">
+              <SidebarTrigger className="-ml-1" />
+              <Separator orientation="vertical" className="mr-2 h-4" />
+              <div className="text-sm font-semibold tracking-tight text-foreground">
+                {activeNav === 'live' && 'Live Monitor & Dialer'}
+                {activeNav === 'pending' && 'CRM Missed Calls (Pending Queue)'}
+                {activeNav === 'batches' && 'Campaign Batches'}
+                {activeNav === 'templates' && 'Campaign Scripts & Prompts'}
+                {activeNav === 'completed' && 'Completed Logs & Audio'}
+              </div>
             </div>
-            <PendingCallsTab
-              crmCalls={crmCalls}
-              isLoadingCrm={isLoadingCrm}
-              crmError={crmError}
-              onFetchCrmCalls={fetchCrmPendingCalls}
-              onQueueLeads={handleQueueLeads}
-              onTriggerManualDial={handleTriggerManualDial}
-              isDialingManual={isDialingManual}
-              completedCalls={completedCalls}
-            />
-          </div>
-        )}
 
-        {/* View 3: Campaign Batches */}
-        {activeNav === 'batches' && (
-          <div className="bg-white p-4 flex-1 min-h-0 overflow-y-auto">
-            <ErrorBoundary onReset={fetchBatches}>
-              <BatchesTab
-                batches={batches}
-                isLoadingBatches={isLoadingBatches}
-                onRefreshBatches={fetchBatches}
-                onRefreshCampaign={fetchCampaignStatus}
-                onQueueLeads={handleQueueLeads}
-              />
-            </ErrorBoundary>
-          </div>
-        )}
+            <div className="flex items-center gap-2">
+              <div className="relative w-60 sm:w-72">
+                <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <Input
+                  type="text"
+                  value={headerSearch}
+                  onChange={(e) => setHeaderSearch(e.target.value)}
+                  placeholder="Filter calls by phone, name, source..."
+                  className="h-8 pl-8 pr-7 text-xs bg-muted/40 border-input focus:bg-background"
+                />
+                {headerSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setHeaderSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </header>
 
-        {/* View 4: Completed Call Logs & Transcripts */}
-        {activeNav === 'completed' && (
-          <div className="bg-white p-4 flex-1 min-h-0 overflow-y-auto">
-            <CompletedLogsTab
-              completedCalls={completedCalls}
-              isLoadingLogs={isLoadingLogs}
-              onRefreshLogs={fetchCompletedLogs}
-              onQueueLeads={handleQueueLeads}
-            />
+          {/* Main Content Workspace */}
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <AlertBanner alertMessage={alertMessage} />
+
+            {/* View 1: Live Monitor & Campaign Dialer */}
+            {activeNav === 'live' && (
+              <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
+                <LiveConsoleView
+                  activeCall={activeCall}
+                  lastCompletedCall={campaignData.last_completed_call}
+                  nextCall={campaignData.next_call}
+                  stats={campaignData.stats}
+                  isRunning={campaignData.is_running}
+                  isPaused={campaignData.is_paused}
+                  activeCalls={campaignData.active_calls || []}
+                  templates={templates}
+                  selectedTemplateId={selectedTemplateId}
+                  onSelectTemplate={handleSelectTemplate}
+                  onNavigateToTemplates={() => setActiveNav('templates')}
+                  onStartCampaign={handleStartCampaign}
+                  onPauseCampaign={handlePauseCampaign}
+                  onResumeCampaign={handleResumeCampaign}
+                  onStopCampaign={handleStopCampaign}
+                  onResetQueue={handleResetQueue}
+                  onRetryFailed={handleRetryFailed}
+                  onTriggerManualDial={handleTriggerManualDial}
+                  manualDialStatus={manualDialStatus}
+                  manualDialFeedback={manualDialFeedback}
+                  manualPhone={manualPhone}
+                  setManualPhone={setManualPhone}
+                  isDialingManual={isDialingManual}
+                  onRefreshCampaign={fetchCampaignStatus}
+                  onRefreshBatches={fetchBatches}
+                  completedCalls={completedCalls}
+                  onRefreshLogs={fetchCompletedLogs}
+                />
+              </div>
+            )}
+
+            {/* View 2: CRM Missed Calls */}
+            {activeNav === 'pending' && (
+              <div className="p-4 flex-1 min-h-0 flex flex-col overflow-hidden">
+                <ErrorBoundary onReset={fetchCrmPendingCalls}>
+                  <PendingCallsTab
+                    crmCalls={crmCalls}
+                    templates={templates}
+                    selectedTemplateId={selectedTemplateId}
+                    onSelectTemplate={handleSelectTemplate}
+                    isLoadingCrm={isLoadingCrm}
+                    crmError={crmError}
+                    onFetchCrmCalls={fetchCrmPendingCalls}
+                    onQueueLeads={handleQueueLeads}
+                    onTriggerManualDial={handleTriggerManualDial}
+                    isDialingManual={isDialingManual}
+                    completedCalls={completedCalls}
+                    searchText={headerSearch}
+                    setSearchText={setHeaderSearch}
+                  />
+                </ErrorBoundary>
+              </div>
+            )}
+
+            {/* View 3: Campaign Batches */}
+            {activeNav === 'batches' && (
+              <div className="p-4 flex-1 min-h-0 flex flex-col overflow-y-auto">
+                <ErrorBoundary onReset={fetchBatches}>
+                  <BatchesTab
+                    batches={batches}
+                    isLoadingBatches={isLoadingBatches}
+                    onRefreshBatches={fetchBatches}
+                    onRefreshCampaign={fetchCampaignStatus}
+                    onQueueLeads={handleQueueLeads}
+                  />
+                </ErrorBoundary>
+              </div>
+            )}
+
+            {/* View 4: Campaign Scripts & Prompts */}
+            {activeNav === 'templates' && (
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                <ErrorBoundary onReset={fetchCampaignTemplates}>
+                  <TemplatesTab
+                    templates={templates}
+                    selectedTemplateId={selectedTemplateId}
+                    onSelectTemplate={handleSelectTemplate}
+                    onRefreshTemplates={fetchCampaignTemplates}
+                  />
+                </ErrorBoundary>
+              </div>
+            )}
+
+            {/* View 5: Completed Call Logs & Transcripts */}
+            {activeNav === 'completed' && (
+              <div className="p-4 flex-1 min-h-0 flex flex-col overflow-hidden">
+                <ErrorBoundary onReset={fetchCompletedLogs}>
+                  <CompletedLogsTab
+                    completedCalls={completedCalls}
+                    isLoadingLogs={isLoadingLogs}
+                    onRefreshLogs={fetchCompletedLogs}
+                    onQueueLeads={handleQueueLeads}
+                    searchText={headerSearch}
+                  />
+                </ErrorBoundary>
+              </div>
+            )}
           </div>
-        )}
-      </main>
-    </div>
+        </SidebarInset>
+      </SidebarProvider>
+    </TooltipProvider>
   );
 }

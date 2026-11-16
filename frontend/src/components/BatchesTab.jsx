@@ -6,18 +6,31 @@ import {
   Layers,
   Clock,
   Volume2,
-  ChevronDown,
-  ChevronUp,
   Activity,
   Bot,
   User,
-  Info,
   Search,
   X,
   RotateCcw,
   ArrowRight,
   Download,
+  Phone,
+  PhoneCall,
+  ThumbsUp,
 } from 'lucide-react';
+import {
+  Table,
+  TableHeader,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+} from './ui/table';
+import CallsTable from './CallsTable';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { cn } from '@/lib/utils';
+import { Card } from './ui/card';
 import {
   formatBytes,
   formatDuration,
@@ -49,6 +62,45 @@ const formatLaunchTimestamp = (b) => {
   return b?.created_at || '--';
 };
 
+// Helper to extract lead CRM date from batch
+const getBatchLeadDate = (b) => {
+  const text = `${b?.source_filter || ''} ${b?.name || ''}`;
+  const rangeMatch = text.match(/\d{4}-\d{2}-\d{2}\s*(?:to|-)\s*\d{4}-\d{2}-\d{2}/);
+  if (rangeMatch) return rangeMatch[0];
+  const dateMatch = text.match(/\d{4}-\d{2}-\d{2}/);
+  if (dateMatch) return dateMatch[0];
+  if (b?.created_at) {
+    const clean = String(b.created_at).split(' ')[0].split('T')[0];
+    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+  }
+  return '--';
+};
+
+// Helper to identify test batches created from predefined test contacts
+export const isTestBatch = (b) => {
+  const name = String(b?.name || '').toLowerCase();
+  const source = String(b?.source_filter || '').toLowerCase();
+  return (
+    name.startsWith('test batch') ||
+    source.includes('predefined test') ||
+    source.includes('test contact')
+  );
+};
+
+// Helper to clean batch title by stripping redundant counts and dates
+const getCleanBatchName = (b) => {
+  let name = b?.name || b?.batch_id || 'Campaign Batch';
+  const isRerun = /^Re-run/i.test(name);
+  name = name.replace(/\s*-\s*\d+\s*calls/gi, '');
+  name = name.replace(/\(\s*\d{4}-\d{2}-\d{2}(?:\s*(?:to|-)\s*\d{4}-\d{2}-\d{2})?\s*\)/gi, '');
+  if (isRerun) {
+    name = name.replace(/^Re-run\s*\(/i, '').replace(/\)$/, '');
+    name = `Re-run: ${name.trim()}`;
+  }
+  name = name.replace(/\s{2,}/g, ' ').trim();
+  return name || b?.batch_id;
+};
+
 // Campaign batches history and per-batch drilldown view with interactive KPI card filters
 export default function BatchesTab({
   batches = [],
@@ -60,8 +112,6 @@ export default function BatchesTab({
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [batchDetail, setBatchDetail] = useState(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
-  const [openTranscriptId, setOpenTranscriptId] = useState(null);
-  const [openTimelineId, setOpenTimelineId] = useState(null);
 
   // Batch Detail Filters
   const [batchKpiFilter, setBatchKpiFilter] = useState('all');
@@ -71,13 +121,59 @@ export default function BatchesTab({
   // Batch Detail Selection State
   const [selectedBatchUuids, setSelectedBatchUuids] = useState(new Set());
   const [isQueueingBatchCalls, setIsQueueingBatchCalls] = useState(false);
+  const [isRerunningBatch, setIsRerunningBatch] = useState(false);
 
-  const toggleTranscript = (callUuid) => {
-    setOpenTranscriptId((prev) => (prev === callUuid ? null : callUuid));
-  };
+  const handleRerunBatch = async (batchIdToRerun, batchNameToRerun) => {
+    const targetId = batchIdToRerun || activeBatchId;
+    if (!targetId) return;
+    const displayName = batchNameToRerun || batchDetail?.batch?.name || targetId;
+    if (!window.confirm(`Re-run batch "${displayName}"? This will queue all its leads into a fresh dialing batch.`)) return;
 
-  const toggleTimeline = (callUuid) => {
-    setOpenTimelineId((prev) => (prev === callUuid ? null : callUuid));
+    setIsRerunningBatch(true);
+    try {
+      const res = await fetch(`/api/campaign/batches/${encodeURIComponent(targetId)}/rerun`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'all' }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ok) {
+          alert(`Successfully queued ${data.queued} leads into new batch: ${data.name || data.batch_id}`);
+          onRefreshCampaign?.();
+          onRefreshBatches?.();
+          if (data.batch_id) openBatchDetail(data.batch_id);
+          return;
+        }
+      }
+
+      // Fallback: Queue directly using existing leads endpoint if running server does not have rerun route
+      let callsToQueue = batchDetail?.batch?.batch_id === targetId || batchDetail?.batch_id === targetId ? batchDetail.calls : null;
+      if (!callsToQueue) {
+        const detailRes = await fetch(`/api/campaign/batches/${encodeURIComponent(targetId)}`);
+        if (detailRes.ok) {
+          const detailData = await detailRes.json();
+          callsToQueue = detailData.calls;
+        }
+      }
+      if (callsToQueue && callsToQueue.length > 0 && onQueueLeads) {
+        const leads = callsToQueue.map((c) => ({
+          phone_number: c.phone_number,
+          customer_name: c.customer_name || c.contact_name || '',
+        })).filter((l) => l.phone_number);
+        const newBatchName = `${displayName} (Rerun)`;
+        await onQueueLeads({ leads, batch_name: newBatchName, source_filter: `Rerun ${targetId}` });
+        alert(`Successfully queued ${leads.length} leads into new batch: ${newBatchName}`);
+        onRefreshCampaign?.();
+        onRefreshBatches?.();
+        return;
+      }
+      throw new Error(`Server returned ${res.status} ${res.statusText}`);
+    } catch (err) {
+      alert(`Failed to re-run batch: ${err.message}`);
+    } finally {
+      setIsRerunningBatch(false);
+    }
   };
 
   const openBatchDetail = async (batchId) => {
@@ -97,6 +193,35 @@ export default function BatchesTab({
     } finally {
       setIsLoadingDetail(false);
     }
+  };
+
+  const handleCallUpdated = (callUuid, updates) => {
+    setBatchDetail((prev) => {
+      if (!prev || !prev.calls) return prev;
+      const nextCalls = prev.calls.map((c) => {
+        const id = c.call_uuid || c.lead_id;
+        return id === callUuid ? { ...c, ...updates } : c;
+      });
+
+      const counts = { dialed: nextCalls.length };
+      for (const call of nextCalls) {
+        const d = (call.disposition || '').toLowerCase();
+        if (d) counts[d] = (counts[d] || 0) + 1;
+      }
+
+      return {
+        ...prev,
+        calls: nextCalls,
+        batch: {
+          ...prev.batch,
+          metrics: {
+            ...prev.batch?.metrics,
+            ...counts,
+          },
+        },
+      };
+    });
+    onRefreshBatches?.();
   };
 
   const handleBackToBatches = () => {
@@ -180,18 +305,59 @@ export default function BatchesTab({
     return list;
   }, [batchDetail, batchKpiFilter, batchSearchQuery]);
 
-  // Filter batches list by search query (Top-level hook to satisfy React Rules of Hooks)
+  // Production campaign batches excluding test batches
+  const productionBatches = useMemo(() => {
+    return (batches || []).filter((b) => !isTestBatch(b));
+  }, [batches]);
+
+  // Filter batches list by search query
   const filteredBatches = useMemo(() => {
-    if (!batchListSearch.trim()) return batches;
+    if (!batchListSearch.trim()) return productionBatches;
     const q = batchListSearch.trim().toLowerCase();
-    return batches.filter(
+    return productionBatches.filter(
       (b) =>
         (b.name || '').toLowerCase().includes(q) ||
         (b.batch_id || '').toLowerCase().includes(q) ||
         (b.source_filter || '').toLowerCase().includes(q) ||
         (b.status || '').toLowerCase().includes(q)
     );
-  }, [batches, batchListSearch]);
+  }, [productionBatches, batchListSearch]);
+
+  // Aggregate KPIs across all production campaign batches
+  const overallKpi = useMemo(() => {
+    let totalBatches = productionBatches.length;
+    let activeBatches = 0;
+    let completedBatches = 0;
+    let totalLeads = 0;
+    let totalDialed = 0;
+    let totalInterested = 0;
+
+    for (const b of productionBatches) {
+      if (b.status === 'completed') {
+        completedBatches += 1;
+      } else {
+        activeBatches += 1;
+      }
+      totalLeads += b.total_leads || 0;
+      const m = b.metrics || {};
+      totalDialed += m.dialed || 0;
+      totalInterested += m.interested || 0;
+    }
+
+    const dialedRate = totalLeads > 0 ? Math.round((totalDialed / totalLeads) * 100) : 0;
+    const conversionRate = totalDialed > 0 ? Math.round((totalInterested / totalDialed) * 100) : 0;
+
+    return {
+      totalBatches,
+      activeBatches,
+      completedBatches,
+      totalLeads,
+      totalDialed,
+      totalInterested,
+      dialedRate,
+      conversionRate,
+    };
+  }, [productionBatches]);
 
   // View B: Detail View
   if (activeBatchId) {
@@ -199,27 +365,6 @@ export default function BatchesTab({
     const calls = batchDetail?.calls || [];
     const m = b.metrics || {};
     const isCompleted = b.status === 'completed';
-
-    const getFilterLabel = (key) => {
-      switch (key) {
-        case 'dialed':
-          return 'Dialed';
-        case 'interested':
-          return 'Interested';
-        case 'declined':
-          return 'Not Interested';
-        case 'wrong':
-          return 'Wrong Number';
-        case 'silent':
-          return 'Silent';
-        case 'no_answer':
-          return 'No Answer';
-        case 'dropped':
-          return 'Dropped';
-        default:
-          return 'All Calls';
-      }
-    };
 
     const selectedBatchCalls = calls.filter((c) => selectedBatchUuids.has(c.call_uuid));
     const allBatchSelected =
@@ -326,6 +471,26 @@ export default function BatchesTab({
               <span className={`w-1.5 h-1.5 ${isCompleted ? 'bg-slate-400' : 'bg-emerald-500 animate-pulse'}`} />
               {(b.status || 'ACTIVE').toUpperCase()}
             </span>
+            {selectedBatchCalls.length > 0 && (
+              <Button
+                size="xs"
+                onClick={handleQueueSelectedBatchCalls}
+                disabled={isQueueingBatchCalls}
+                className="h-7 gap-1.5 bg-[#008792] hover:bg-[#007680] text-white text-xs font-semibold cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{isQueueingBatchCalls ? 'Queueing...' : `Queue Selected (${selectedBatchCalls.length})`}</span>
+              </Button>
+            )}
+            <button
+              onClick={() => handleRerunBatch()}
+              disabled={isRerunningBatch}
+              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold bg-[#008792] text-white hover:bg-[#00747d] transition disabled:opacity-50"
+              title="Re-run all leads from this batch"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${isRerunningBatch ? 'animate-spin' : ''}`} />
+              <span>{isRerunningBatch ? 'Re-running...' : 'Re-run Batch'}</span>
+            </button>
             <button
               onClick={handleDeleteBatch}
               className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 transition"
@@ -337,539 +502,169 @@ export default function BatchesTab({
         </div>
 
         {/* Clickable KPI Filter Cards Row */}
+        {/* Interactive KPI Breakdown - shadcn Cards */}
         <div>
           <div className="flex items-center justify-between mb-2 px-0.5">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground select-none">
               Interactive KPI Breakdown (Click Card to Filter)
             </span>
             {batchKpiFilter !== 'all' && (
-              <button
+              <Button
+                variant="link"
+                size="xs"
                 onClick={() => setBatchKpiFilter('all')}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#008792] hover:underline"
+                className="h-auto p-0 text-[11px] font-semibold text-[#008792]"
               >
-                <RotateCcw className="w-3 h-3" />
+                <RotateCcw className="w-3 h-3 mr-1" />
                 <span>Show All ({calls.length})</span>
-              </button>
+              </Button>
             )}
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-1.5">
             {/* Total Card */}
-            <div
+            <Card
               onClick={() => handleKpiCardClick('all')}
-              role="button"
-              tabIndex={0}
-              title="Click to view all leads in batch"
-              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
                 batchKpiFilter === 'all'
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-white border-slate-200 hover:bg-slate-50'
-              }`}
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
             >
-              <span className={`block text-base font-bold font-mono leading-tight ${
-                batchKpiFilter === 'all' ? 'text-white' : 'text-slate-900'
-              }`}>
+              <span className="block text-sm font-bold font-mono leading-none mb-0.5">
                 {b.total_leads || 0}
               </span>
-              <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                batchKpiFilter === 'all' ? 'text-slate-300' : 'text-slate-400'
-              }`}>Total</span>
-            </div>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">Total</span>
+            </Card>
 
             {/* Dialed Card */}
-            <div
+            <Card
               onClick={() => handleKpiCardClick('dialed')}
-              role="button"
-              tabIndex={0}
-              title="Click to filter dialed calls"
-              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
                 batchKpiFilter === 'dialed'
                   ? 'bg-[#008792] text-white border-[#008792]'
-                  : 'bg-white border-slate-200 hover:bg-[#008792]/5'
-              }`}
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
             >
-              <span className={`block text-base font-bold font-mono leading-tight ${
-                batchKpiFilter === 'dialed' ? 'text-white' : 'text-[#008792]'
-              }`}>
+              <span className={cn('block text-sm font-bold font-mono leading-none mb-0.5', batchKpiFilter === 'dialed' ? 'text-white' : 'text-[#008792]')}>
                 {m.dialed || 0}
               </span>
-              <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                batchKpiFilter === 'dialed' ? 'text-teal-100' : 'text-slate-400'
-              }`}>Dialed</span>
-            </div>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">Dialed</span>
+            </Card>
 
             {/* Interested Card */}
-            <div
+            <Card
               onClick={() => handleKpiCardClick('interested')}
-              role="button"
-              tabIndex={0}
-              title="Click to filter interested calls"
-              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
                 batchKpiFilter === 'interested'
                   ? 'bg-emerald-600 text-white border-emerald-600'
-                  : 'bg-white border-slate-200 hover:bg-emerald-50'
-              }`}
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
             >
-              <span className={`block text-base font-bold font-mono leading-tight ${
-                batchKpiFilter === 'interested' ? 'text-white' : 'text-emerald-700'
-              }`}>
+              <span className={cn('block text-sm font-bold font-mono leading-none mb-0.5', batchKpiFilter === 'interested' ? 'text-white' : 'text-emerald-600')}>
                 {m.interested || 0}
               </span>
-              <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                batchKpiFilter === 'interested' ? 'text-emerald-100' : 'text-slate-400'
-              }`}>Interested</span>
-            </div>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">Interested</span>
+            </Card>
 
             {/* Not Interested Card */}
-            <div
+            <Card
               onClick={() => handleKpiCardClick('declined')}
-              role="button"
-              tabIndex={0}
-              title="Click to filter not interested calls"
-              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
                 batchKpiFilter === 'declined'
                   ? 'bg-rose-600 text-white border-rose-600'
-                  : 'bg-white border-slate-200 hover:bg-rose-50'
-              }`}
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
             >
-              <span className={`block text-base font-bold font-mono leading-tight ${
-                batchKpiFilter === 'declined' ? 'text-white' : 'text-rose-700'
-              }`}>
+              <span className={cn('block text-sm font-bold font-mono leading-none mb-0.5', batchKpiFilter === 'declined' ? 'text-white' : 'text-rose-600')}>
                 {m.not_interested || 0}
               </span>
-              <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                batchKpiFilter === 'declined' ? 'text-rose-100' : 'text-slate-400'
-              }`}>Not Interested</span>
-            </div>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">Not Int.</span>
+            </Card>
 
             {/* Wrong Card */}
-            <div
+            <Card
               onClick={() => handleKpiCardClick('wrong')}
-              role="button"
-              tabIndex={0}
-              title="Click to filter wrong number calls"
-              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
                 batchKpiFilter === 'wrong'
                   ? 'bg-purple-600 text-white border-purple-600'
-                  : 'bg-white border-slate-200 hover:bg-purple-50'
-              }`}
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
             >
-              <span className={`block text-base font-bold font-mono leading-tight ${
-                batchKpiFilter === 'wrong' ? 'text-white' : 'text-purple-700'
-              }`}>
+              <span className={cn('block text-sm font-bold font-mono leading-none mb-0.5', batchKpiFilter === 'wrong' ? 'text-white' : 'text-purple-600')}>
                 {m.wrong_number || 0}
               </span>
-              <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                batchKpiFilter === 'wrong' ? 'text-purple-100' : 'text-slate-400'
-              }`}>Wrong</span>
-            </div>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">Wrong</span>
+            </Card>
 
             {/* Silent Card */}
-            <div
+            <Card
               onClick={() => handleKpiCardClick('silent')}
-              role="button"
-              tabIndex={0}
-              title="Click to filter silent / not talking calls"
-              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
                 batchKpiFilter === 'silent'
                   ? 'bg-amber-600 text-white border-amber-600'
-                  : 'bg-white border-slate-200 hover:bg-amber-50'
-              }`}
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
             >
-              <span className={`block text-base font-bold font-mono leading-tight ${
-                batchKpiFilter === 'silent' ? 'text-white' : 'text-amber-700'
-              }`}>
+              <span className={cn('block text-sm font-bold font-mono leading-none mb-0.5', batchKpiFilter === 'silent' ? 'text-white' : 'text-amber-600')}>
                 {m.not_talking || 0}
               </span>
-              <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                batchKpiFilter === 'silent' ? 'text-amber-100' : 'text-slate-400'
-              }`}>Silent</span>
-            </div>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">Silent</span>
+            </Card>
 
             {/* No Answer Card */}
-            <div
+            <Card
               onClick={() => handleKpiCardClick('no_answer')}
-              role="button"
-              tabIndex={0}
-              title="Click to filter unanswered calls"
-              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
                 batchKpiFilter === 'no_answer'
                   ? 'bg-slate-700 text-white border-slate-700'
-                  : 'bg-white border-slate-200 hover:bg-slate-50'
-              }`}
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
             >
-              <span className={`block text-base font-bold font-mono leading-tight ${
-                batchKpiFilter === 'no_answer' ? 'text-white' : 'text-slate-700'
-              }`}>
+              <span className={cn('block text-sm font-bold font-mono leading-none mb-0.5', batchKpiFilter === 'no_answer' ? 'text-white' : 'text-foreground')}>
                 {m.no_answer || 0}
               </span>
-              <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                batchKpiFilter === 'no_answer' ? 'text-slate-200' : 'text-slate-400'
-              }`}>No Answer</span>
-            </div>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">No Answer</span>
+            </Card>
 
             {/* Dropped Card */}
-            <div
+            <Card
               onClick={() => handleKpiCardClick('dropped')}
-              role="button"
-              tabIndex={0}
-              title="Click to filter dropped calls"
-              className={`border p-2.5 text-center cursor-pointer transition-all select-none ${
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
                 batchKpiFilter === 'dropped'
                   ? 'bg-red-700 text-white border-red-700'
-                  : 'bg-white border-slate-200 hover:bg-red-50'
-              }`}
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
             >
-              <span className={`block text-base font-bold font-mono leading-tight ${
-                batchKpiFilter === 'dropped' ? 'text-white' : 'text-red-700'
-              }`}>
+              <span className={cn('block text-sm font-bold font-mono leading-none mb-0.5', batchKpiFilter === 'dropped' ? 'text-white' : 'text-red-600')}>
                 {m.dropped || 0}
               </span>
-              <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                batchKpiFilter === 'dropped' ? 'text-red-100' : 'text-slate-400'
-              }`}>Dropped</span>
-            </div>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">Dropped</span>
+            </Card>
           </div>
         </div>
 
-        {/* Search & Active Filter Strip */}
-        <div className="flex flex-wrap items-center justify-between gap-2.5 p-2.5 bg-slate-50/70 border border-slate-200">
-          <div className="flex items-center gap-2 flex-1 min-w-[220px]">
-            <div className="relative flex-1">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={batchSearchQuery}
-                onChange={(e) => setBatchSearchQuery(e.target.value)}
-                placeholder="Search calls in this batch by phone, customer name, diagnostic root cause..."
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs pl-8 pr-8 py-1.5 outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792]"
-              />
-              {batchSearchQuery && (
-                <button
-                  onClick={() => setBatchSearchQuery('')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 text-xs flex-wrap">
-            {batchKpiFilter !== 'all' && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#008792]/10 text-[#008792] font-semibold border border-[#008792]/20">
-                <span>Filter: {getFilterLabel(batchKpiFilter)}</span>
-                <button
-                  onClick={() => setBatchKpiFilter('all')}
-                  className="hover:text-[#007680]"
-                >
-                  <X className="w-3 h-3 ml-0.5" />
-                </button>
-              </span>
-            )}
-
-            <span className="font-mono text-xs font-semibold text-slate-600">
-              Showing {filteredBatchCalls.length} of {calls.length} calls
-            </span>
-
-            <button
-              onClick={handleQueueSelectedBatchCalls}
-              disabled={isQueueingBatchCalls || selectedBatchCalls.length === 0}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white transition disabled:opacity-40 cursor-pointer"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>
-                {isQueueingBatchCalls
-                  ? 'Queueing...'
-                  : `Queue Selected to Dialer (${selectedBatchCalls.length})`}
-              </span>
-            </button>
-          </div>
-        </div>
-
-        {/* Calls in this batch - High Density Slate Table */}
-        <div className="overflow-x-auto max-h-[calc(100vh-320px)] border border-slate-200 bg-white">
-          <table className="w-full border-collapse text-left text-xs">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px] sticky top-0 z-10 backdrop-blur-sm">
-                <th className="w-10 px-3.5 py-3">
-                  <input
-                    type="checkbox"
-                    checked={allBatchSelected}
-                    onChange={toggleSelectAllBatchCalls}
-                    className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
-                  />
-                </th>
-                <th className="px-3.5 py-3 whitespace-nowrap">Recipient</th>
-                <th className="px-3.5 py-3 whitespace-nowrap">Disposition</th>
-                <th className="px-3.5 py-3 whitespace-nowrap">Stream Health</th>
-                <th className="px-3.5 py-3 whitespace-nowrap">Duration</th>
-                <th className="px-3.5 py-3 whitespace-nowrap">Time &amp; Callback</th>
-                <th className="px-3.5 py-3 whitespace-nowrap">Diagnostic Summary</th>
-                <th className="px-3.5 py-3 whitespace-nowrap">Audio Recording</th>
-                <th className="px-3.5 py-3 text-right whitespace-nowrap">Investigation</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {isLoadingDetail ? (
-                <tr>
-                  <td colSpan={9} className="text-center py-12 text-slate-400">
-                    <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
-                    <span className="text-xs font-medium">Fetching call audio telemetry and transcripts...</span>
-                  </td>
-                </tr>
-              ) : filteredBatchCalls.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="text-center py-12 bg-slate-50/50">
-                    <p className="font-semibold text-slate-700">No calls match the selected KPI filter</p>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      Click 'Show All' above or click the Total card to view all {calls.length} calls in this batch.
-                    </p>
-                    {(batchKpiFilter !== 'all' || batchSearchQuery) && (
-                      <button
-                        onClick={() => {
-                          setBatchKpiFilter('all');
-                          setBatchSearchQuery('');
-                        }}
-                        className="mt-3 inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-[#008792] hover:bg-slate-50"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Reset Batch Filters</span>
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ) : (
-                filteredBatchCalls.map((entry, idx) => {
-                  const callUuid = entry.call_uuid || entry.lead_id || `call-${idx}`;
-                  const shortUuid = String(callUuid).slice(0, 8);
-                  const displayPhone = entry.phone_number || String(callUuid).slice(0, 12);
-                  const recUrl = entry.recording_url;
-                  const durationSec = entry.duration || 0;
-                  const dispConf = getDispositionConfig(entry.disposition);
-                  const diagConf = getDiagnosticConfig(entry.diagnostic?.classification);
-                  const custName = entry.customer_name || entry.contact_name || '';
-                  const cbTime = entry.callback_time || '';
-                  const diag = entry.diagnostic || {};
-                  const am = diag.audio_metrics || entry.audio_metrics || {};
-                  const inBytes = am.inbound_bytes || 0;
-                  const outBytes = am.outbound_bytes || 0;
-                  const inChunks = am.inbound_chunks || 0;
-
-                  const isTranscriptOpen = openTranscriptId === callUuid;
-                  const isTimelineOpen = openTimelineId === callUuid;
-                  const turnsCount = (entry.turns || []).length;
-                  const eventsCount = (entry.events || []).length;
-                  const isChecked = selectedBatchUuids.has(callUuid);
-
-                  return (
-                    <React.Fragment key={callUuid}>
-                      <tr className={`hover:bg-slate-50/80 transition-colors ${isChecked ? 'bg-[#008792]/5' : isTranscriptOpen || isTimelineOpen ? 'bg-slate-50/50' : ''}`}>
-                        {/* Checkbox */}
-                        <td className="px-3.5 py-3">
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => toggleSelectBatchCall(callUuid)}
-                            className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
-                          />
-                        </td>
-
-                        {/* Recipient */}
-                        <td className="px-3.5 py-3 whitespace-nowrap">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs font-bold text-slate-900">
-                              {displayPhone}
-                            </span>
-                            {custName && (
-                              <span className="text-[11px] font-semibold text-[#008792] bg-[#008792]/10 px-1.5 py-0.5 border border-[#008792]/20">
-                                {custName}
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[10px] font-mono text-slate-400 mt-0.5">
-                            #{shortUuid}
-                          </div>
-                        </td>
-
-                        {/* Disposition */}
-                        <td className="px-3.5 py-3 whitespace-nowrap">
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold border ${dispConf.bg} ${dispConf.text} ${dispConf.border}`}>
-                            <span className={`w-1.5 h-1.5 ${dispConf.dot}`} />
-                            {dispConf.label}
-                          </span>
-                        </td>
-
-                        {/* Stream Health */}
-                        <td className="px-3.5 py-3 whitespace-nowrap">
-                          {diagConf ? (
-                            <span className={`inline-flex items-center px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border ${diagConf.bg} ${diagConf.text} ${diagConf.border}`}>
-                              {diagConf.label}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400 text-[11px]">--</span>
-                          )}
-                        </td>
-
-                        {/* Duration */}
-                        <td className="px-3.5 py-3 whitespace-nowrap font-mono text-xs text-slate-700">
-                          <span className="inline-flex items-center gap-1 bg-slate-50 border border-slate-200 px-2 py-0.5">
-                            <Clock className="w-3 h-3 text-slate-400" />
-                            <span>{formatDuration(durationSec)}</span>
-                          </span>
-                        </td>
-
-                        {/* Time & Callback */}
-                        <td className="px-3.5 py-3 whitespace-nowrap">
-                          <div className="text-slate-700 font-mono text-[11px]">
-                            {formatTime(entry.created_at)}
-                          </div>
-                          {cbTime && (
-                            <div className="mt-1 inline-flex items-center gap-1 font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 border border-emerald-200 text-[10px]">
-                              <span>Callback: {cbTime}</span>
-                            </div>
-                          )}
-                        </td>
-
-                        {/* Diagnostic Summary */}
-                        <td className="px-3.5 py-3 max-w-[280px]">
-                          <div className="text-xs text-slate-800 line-clamp-2 leading-snug" title={diag.root_cause_summary || 'Normal conversational call'}>
-                            {diag.root_cause_summary || <span className="text-slate-400 italic">Normal conversational call</span>}
-                          </div>
-                          <div className="text-[10px] font-mono text-slate-400 mt-1 flex items-center gap-1.5">
-                            <span>In: {formatBytes(inBytes)} ({inChunks}c)</span>
-                            <span>&bull;</span>
-                            <span>Out: {formatBytes(outBytes)}</span>
-                          </div>
-                        </td>
-
-                        {/* Audio Recording */}
-                        <td className="px-3.5 py-3 whitespace-nowrap min-w-[200px]">
-                          {(recUrl || (durationSec > 5 && (inBytes > 0 || outBytes > 0))) ? (
-                            <audio
-                              controls
-                              preload="none"
-                              className="w-48 h-7 outline-none"
-                              src={`/api/recording/${encodeURIComponent(callUuid)}`}
-                            />
-                          ) : (
-                            <span className="text-[11px] text-slate-400 italic">No recording</span>
-                          )}
-                        </td>
-
-                        {/* Investigation Actions */}
-                        <td className="px-3.5 py-3 text-right whitespace-nowrap">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              onClick={() => toggleTranscript(callUuid)}
-                              className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold border transition ${
-                                isTranscriptOpen
-                                  ? 'bg-[#008792] text-white border-[#008792]'
-                                  : 'bg-white text-[#008792] border-slate-200 hover:border-[#008792]'
-                              }`}
-                              title="Toggle dialog turns transcript"
-                            >
-                              <span>Transcript ({turnsCount})</span>
-                              {isTranscriptOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                            </button>
-
-                            <button
-                              onClick={() => toggleTimeline(callUuid)}
-                              className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold border transition ${
-                                isTimelineOpen
-                                  ? 'bg-slate-800 text-white border-slate-800'
-                                  : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
-                              }`}
-                              title="Toggle carrier lifecycle events"
-                            >
-                              <Activity className="w-3 h-3" />
-                              {isTimelineOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-
-                      {/* Expandable Accordion Row */}
-                      {(isTranscriptOpen || isTimelineOpen) && (
-                        <tr className="bg-slate-50/70 border-b border-slate-200">
-                          <td colSpan={9} className="p-3.5">
-                            {isTranscriptOpen && (
-                              <div className="bg-white border border-slate-200 p-3 space-y-2 mb-2.5">
-                                <div className="flex items-center justify-between pb-2 border-b border-slate-100 text-xs">
-                                  <span className="font-bold text-slate-800 uppercase tracking-wider">
-                                    Dialog Transcript ({turnsCount} turns)
-                                  </span>
-                                  <span className="text-[10px] text-slate-400 font-mono">
-                                    UUID: {callUuid}
-                                  </span>
-                                </div>
-
-                                {turnsCount > 0 ? (
-                                  <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                                    {entry.turns.map((t, idx) => {
-                                      const isAgent = t.role === 'agent';
-                                      return (
-                                        <div
-                                          key={idx}
-                                          className={`flex flex-col ${isAgent ? 'items-start' : 'items-end'}`}
-                                        >
-                                          <div className="flex items-center gap-1 text-[10px] text-slate-400 mb-0.5 px-1 font-semibold uppercase">
-                                            {isAgent ? <Bot className="w-3 h-3 text-[#008792]" /> : <User className="w-3 h-3 text-emerald-600" />}
-                                            <span>{isAgent ? 'Ananya (Voice AI)' : 'Customer'}</span>
-                                          </div>
-                                          <div
-                                            className={`max-w-[85%] px-3 py-1.5 text-xs leading-relaxed ${
-                                              isAgent
-                                                ? 'bg-[#008792]/10 text-teal-950 border border-[#008792]/20'
-                                                : 'bg-white text-slate-900 border border-slate-200'
-                                            }`}
-                                          >
-                                            {t.text}
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                ) : (
-                                  <p className="text-xs text-slate-400 text-center py-2">
-                                    No dialog turns recorded.
-                                  </p>
-                                )}
-                              </div>
-                            )}
-
-                            {isTimelineOpen && (
-                              <div className="bg-white border border-slate-200 p-3">
-                                <div className="flex items-center justify-between pb-2 border-b border-slate-100 text-xs mb-3">
-                                  <span className="font-bold text-slate-800 uppercase tracking-wider">
-                                    Carrier Lifecycle Timeline ({eventsCount} events)
-                                  </span>
-                                </div>
-
-                                {eventsCount > 0 ? (
-                                  <div className="relative pl-4 space-y-3 before:absolute before:left-1.5 before:top-1.5 before:bottom-1.5 before:w-0.5 before:bg-slate-200 max-h-60 overflow-y-auto">
-                                    {entry.events.map((ev, idx) => (
-                                      <div key={idx} className="flex justify-between text-xs font-mono text-slate-600">
-                                        <span>{ev.event}</span>
-                                        <span className="text-slate-400">{ev.timestamp ? ev.timestamp.slice(11, 23) : '--'}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <p className="text-xs text-slate-400 text-center py-2">No events recorded.</p>
-                                )}
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        {/* Calls in this batch - Reusable CallsTable */}
+        <CallsTable
+          calls={filteredBatchCalls}
+          isLoading={isLoadingDetail}
+          emptyTitle="No calls match the selected KPI filter"
+          emptyDescription={`Click 'Show All' above or click the Total card to view all ${calls.length} calls in this batch.`}
+          onResetFilters={batchKpiFilter !== 'all' ? () => setBatchKpiFilter('all') : undefined}
+          selectedUuids={selectedBatchUuids}
+          onToggleSelect={toggleSelectBatchCall}
+          onToggleSelectAll={toggleSelectAllBatchCalls}
+          onCallUpdated={handleCallUpdated}
+          containerClassName="max-h-[calc(100vh-220px)]"
+        />
       </div>
     );
   }
@@ -894,6 +689,69 @@ export default function BatchesTab({
         </button>
       </div>
 
+      {/* High-Level Overview KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {/* 1. Total Batches */}
+        <Card className="p-3 bg-card border-border shadow-none flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider block">
+              Campaign Batches
+            </span>
+            <div className="flex items-baseline gap-2">
+              <span className="text-xl font-bold font-mono text-foreground">
+                {overallKpi.totalBatches}
+              </span>
+              <span className="text-[11px] text-muted-foreground font-mono">
+                ({overallKpi.activeBatches} active &bull; {overallKpi.completedBatches} completed)
+              </span>
+            </div>
+          </div>
+          <div className="w-8 h-8 rounded-md bg-[#008792]/10 flex items-center justify-center shrink-0">
+            <Layers className="w-4 h-4 text-[#008792]" />
+          </div>
+        </Card>
+
+        {/* 2. Customers Called */}
+        <Card className="p-3 bg-card border-border shadow-none flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider block">
+              Customers Called
+            </span>
+            <div className="flex items-baseline gap-2">
+              <span className="text-xl font-bold font-mono text-foreground">
+                {overallKpi.totalDialed.toLocaleString()}
+              </span>
+              <span className="text-[11px] text-muted-foreground font-mono">
+                / {overallKpi.totalLeads.toLocaleString()} leads ({overallKpi.dialedRate}%)
+              </span>
+            </div>
+          </div>
+          <div className="w-8 h-8 rounded-md bg-blue-500/10 flex items-center justify-center shrink-0">
+            <PhoneCall className="w-4 h-4 text-blue-600" />
+          </div>
+        </Card>
+
+        {/* 3. Interested Customers */}
+        <Card className="p-3 bg-card border-border shadow-none flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider block">
+              Interested Customers
+            </span>
+            <div className="flex items-baseline gap-2">
+              <span className="text-xl font-bold font-mono text-emerald-700">
+                {overallKpi.totalInterested.toLocaleString()}
+              </span>
+              <span className="text-[11px] text-emerald-600 font-mono font-semibold">
+                ({overallKpi.conversionRate}% conversion)
+              </span>
+            </div>
+          </div>
+          <div className="w-8 h-8 rounded-md bg-emerald-500/10 flex items-center justify-center shrink-0">
+            <ThumbsUp className="w-4 h-4 text-emerald-600" />
+          </div>
+        </Card>
+      </div>
+
       {/* Batches Search & Stats Filter */}
       {batches.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2.5 bg-slate-50 border border-slate-200 p-2.5 text-xs">
@@ -913,100 +771,166 @@ export default function BatchesTab({
             )}
           </div>
           <div className="text-[11px] text-slate-500 font-mono">
-            Showing <span className="font-bold text-slate-900">{filteredBatches.length}</span> of {batches.length} batches
+            Showing <span className="font-bold text-slate-900">{filteredBatches.length}</span> of {productionBatches.length} batches
           </div>
         </div>
       )}
 
-      <div className="space-y-3 max-h-[720px] overflow-y-auto pr-1">
-        {filteredBatches.length === 0 ? (
-          <div className="text-center py-14 bg-slate-50/50 border border-dashed border-slate-200">
-            <Layers className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-            <p className="text-xs font-semibold text-slate-700">
-              {batchListSearch ? 'No batches match your search filter' : 'No campaign batches recorded yet'}
-            </p>
-            {batchListSearch && (
-              <button
-                onClick={() => setBatchListSearch('')}
-                className="mt-2 text-xs font-semibold text-[#008792] hover:underline"
-              >
-                Clear Search
-              </button>
-            )}
-            {!batchListSearch && (
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                Select leads from the CRM Pending Queue and click 'Queue Selected to Dialer' to launch a batch.
-              </p>
-            )}
-          </div>
-        ) : (
-          filteredBatches.map((b) => {
-            const m = b.metrics || {};
-            const isCompleted = b.status === 'completed';
-            const launchTimestamp = formatLaunchTimestamp(b);
+      <div className="rounded-md border border-border overflow-x-auto bg-card">
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-muted/50 hover:bg-muted/50 border-b border-border">
+              <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Campaign Batch</TableHead>
+              <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Lead Date</TableHead>
+              <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Total Calls</TableHead>
+              <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Dialed</TableHead>
+              <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Status</TableHead>
+              <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Launch Date</TableHead>
+              <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Outcome Breakdown</TableHead>
+              <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredBatches.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={8} className="text-center py-14 bg-muted/20">
+                  <Layers className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-50" />
+                  <p className="text-xs font-semibold text-foreground">
+                    {batchListSearch ? 'No batches match your search filter' : 'No campaign batches recorded yet'}
+                  </p>
+                  {batchListSearch ? (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => setBatchListSearch('')}
+                      className="mt-2 text-xs font-semibold text-[#008792]"
+                    >
+                      Clear Search
+                    </Button>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Select leads from the CRM Pending Queue and click 'Queue Selected to Dialer' to launch a batch.
+                    </p>
+                  )}
+                </TableCell>
+              </TableRow>
+            ) : (
+              filteredBatches.map((b) => {
+                const m = b.metrics || {};
+                const isCompleted = b.status === 'completed';
+                const launchTimestamp = formatLaunchTimestamp(b);
+                const total = b.total_leads || 0;
+                const dialed = m.dialed || 0;
+                const pct = total > 0 ? Math.min(100, Math.round((dialed / total) * 100)) : 0;
 
-            return (
-              <div
-                key={b.batch_id}
-                onClick={() => openBatchDetail(b.batch_id)}
-                className="bg-white border border-slate-200 hover:border-[#008792] p-4 transition cursor-pointer group"
-              >
-                <div className="flex items-center justify-between mb-1.5">
-                  <h4 className="font-bold text-sm text-slate-900 group-hover:text-[#008792] transition-colors">
-                    {b.name || b.batch_id}
-                  </h4>
-                  <span
-                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider border ${
-                      isCompleted
-                        ? 'bg-slate-100 text-slate-600 border-slate-200'
-                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    }`}
+                return (
+                  <TableRow
+                    key={b.batch_id}
+                    onClick={() => openBatchDetail(b.batch_id)}
+                    className="cursor-pointer hover:bg-muted/40 transition-colors group border-b border-border/60"
                   >
-                    <span className={`w-1.5 h-1.5 ${isCompleted ? 'bg-slate-400' : 'bg-emerald-500 animate-pulse'}`} />
-                    {(b.status || 'ACTIVE').toUpperCase()}
-                  </span>
-                </div>
+                    {/* Clean Campaign Batch Name */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
+                      <span
+                        className="font-medium text-xs text-foreground group-hover:text-[#008792] transition-colors"
+                        title={`Batch ID: ${b.batch_id}`}
+                      >
+                        {getCleanBatchName(b)}
+                      </span>
+                    </TableCell>
 
-                <div className="text-xs text-slate-400 mb-3 flex items-center gap-2">
-                  <span>ID: <span className="font-mono text-slate-600">{b.batch_id}</span></span>
-                  <span>&bull;</span>
-                  <span>Launched: {launchTimestamp}</span>
-                  <span>&bull;</span>
-                  <span>{b.source_filter || 'CRM Missed Calls'}</span>
-                </div>
+                    {/* Lead Date */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap font-mono text-xs text-muted-foreground">
+                      {getBatchLeadDate(b)}
+                    </TableCell>
 
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  <span className="text-xs font-mono px-2 py-0.5 bg-slate-100 text-slate-700 font-semibold border border-slate-200">
-                    Total: {b.total_leads || 0}
-                  </span>
-                  <span className="text-xs font-mono px-2 py-0.5 bg-[#008792]/10 text-[#008792] font-semibold border border-[#008792]/20">
-                    Dialed: {m.dialed || 0}
-                  </span>
-                  <span className="text-xs font-mono px-2 py-0.5 bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
-                    Interested: {m.interested || 0}
-                  </span>
-                  <span className="text-xs font-mono px-2 py-0.5 bg-rose-50 text-rose-700 font-semibold border border-rose-200">
-                    Not Interested: {m.not_interested || 0}
-                  </span>
-                  <span className="text-xs font-mono px-2 py-0.5 bg-purple-50 text-purple-700 font-semibold border border-purple-200">
-                    Wrong: {m.wrong_number || 0}
-                  </span>
-                  <span className="text-xs font-mono px-2 py-0.5 bg-amber-50 text-amber-700 font-semibold border border-amber-200">
-                    Silent: {m.not_talking || 0}
-                  </span>
-                  <span className="text-xs font-mono px-2 py-0.5 bg-slate-100 text-slate-600 font-semibold border border-slate-200">
-                    No Answer: {m.no_answer || 0}
-                  </span>
-                </div>
+                    {/* Total Calls */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap font-mono text-xs font-semibold text-foreground">
+                      {total}
+                    </TableCell>
 
-                <div className="text-xs text-[#008792] font-semibold flex items-center gap-1 group-hover:underline">
-                  <span>View Call Recordings &amp; Transcripts</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </div>
-              </div>
-            );
-          })
-        )}
+                    {/* Dialed & Percentage */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap font-mono text-xs">
+                      <span className="text-foreground font-medium">{dialed}</span>
+                      <span className="text-muted-foreground text-[11px] ml-1">({pct}%)</span>
+                    </TableCell>
+
+                    {/* Status */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          'text-[10px] font-semibold px-2 py-0.5',
+                          isCompleted
+                            ? 'border-border bg-muted/40 text-muted-foreground'
+                            : 'border-emerald-500/30 bg-emerald-50 text-emerald-700'
+                        )}
+                      >
+                        <span className={cn('w-1.5 h-1.5 rounded-full mr-1.5 inline-block', isCompleted ? 'bg-muted-foreground' : 'bg-emerald-500 animate-pulse')} />
+                        {(b.status || 'ACTIVE').toUpperCase()}
+                      </Badge>
+                    </TableCell>
+
+                    {/* Launch Date */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap text-xs text-muted-foreground font-mono">
+                      {launchTimestamp}
+                    </TableCell>
+
+                    {/* Outcome Breakdown - Strict Single Row */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
+                      <div className="flex items-center gap-1 whitespace-nowrap">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-50 text-emerald-700 border border-emerald-500/20" title="Interested">
+                          Int: {m.interested || 0}
+                        </span>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-rose-50 text-rose-700 border border-rose-500/20" title="Not Interested">
+                          Decl: {m.not_interested || 0}
+                        </span>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-purple-50 text-purple-700 border border-purple-500/20" title="Wrong Number">
+                          Wrong: {m.wrong_number || 0}
+                        </span>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-amber-50 text-amber-700 border border-amber-500/20" title="Silent / Not Talking">
+                          Silent: {m.not_talking || 0}
+                        </span>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-slate-100 text-slate-600 border border-slate-200" title="No Answer">
+                          No Ans: {m.no_answer || 0}
+                        </span>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-red-50 text-red-700 border border-red-500/20" title="Dropped">
+                          Drop: {m.dropped || 0}
+                        </span>
+                      </div>
+                    </TableCell>
+
+                    {/* Actions */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => handleRerunBatch(b.batch_id, b.name)}
+                          disabled={isRerunningBatch}
+                          className="h-6 gap-1 px-2 text-[11px] font-semibold text-[#008792] hover:border-[#008792] cursor-pointer"
+                          title="Re-run this batch"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>Re-run</span>
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          onClick={() => openBatchDetail(b.batch_id)}
+                          className="h-6 w-6 p-0 text-muted-foreground group-hover:text-[#008792] cursor-pointer"
+                          title="View Call Recordings & Transcripts"
+                        >
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
       </div>
     </div>
   );

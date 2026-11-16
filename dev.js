@@ -74,32 +74,57 @@ async function main() {
   // 1. Initialize tunnel if available
   if (fs.existsSync(cloudflaredExe)) {
     console.log('  Establishing Cloudflare tunnel...');
+
+    // Terminate any previous orphan cloudflared instances on Windows
+    if (process.platform === 'win32') {
+      try {
+        const { execSync } = await import('child_process');
+        execSync('taskkill /f /im cloudflared.exe >nul 2>&1', { stdio: 'ignore' });
+      } catch {
+        // No existing cloudflared process running
+      }
+    }
+
     tunnelProcess = spawn(cloudflaredExe, ['tunnel', '--url', 'http://127.0.0.1:8000'], {
       cwd: __dirname,
       shell: false,
     });
 
+    // Permanent listener: updates .env whenever cloudflared emits an active tunnel URL
+    const onTunnelData = (data) => {
+      const text = data.toString();
+      const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+      if (match) {
+        updateEnvPublicUrl(match[0]);
+        process.env.PUBLIC_URL = match[0];
+      }
+    };
+    tunnelProcess.stdout.on('data', onTunnelData);
+    tunnelProcess.stderr.on('data', onTunnelData);
+
+    // Allow up to 25s for initial tunnel connection before proceeding
     const waitForTunnel = new Promise((resolve) => {
-      const timeout = setTimeout(() => resolve(null), 8000);
-      const onData = (data) => {
-        const text = data.toString();
-        const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+      const timeout = setTimeout(() => {
+        console.log('  Tunnel connection took >25s, proceeding with background sync...');
+        resolve(null);
+      }, 25000);
+
+      const checkUrl = (data) => {
+        const match = data.toString().match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
         if (match) {
           clearTimeout(timeout);
-          updateEnvPublicUrl(match[0]);
-          process.env.PUBLIC_URL = match[0];
           resolve(match[0]);
         }
       };
-      tunnelProcess.stdout.on('data', onData);
-      tunnelProcess.stderr.on('data', onData);
+      tunnelProcess.stdout.on('data', checkUrl);
+      tunnelProcess.stderr.on('data', checkUrl);
     });
 
     await waitForTunnel;
   }
 
   // 2. Spawn Python backend server
-  backend = spawn(pythonExe, ['server.py'], {
+  backend = spawn(pythonExe, ['backend/server.py'], {
     cwd: __dirname,
     stdio: 'inherit',
     shell: false,

@@ -6,7 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import httpx
 
-BASE_DIR = Path(__file__).parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env", override=True)
 
 API_BASE = "https://api.vobiz.ai/api/v1"

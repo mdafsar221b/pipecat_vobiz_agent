@@ -10,7 +10,13 @@ from dotenv import load_dotenv
 from loguru import logger
 from starlette.websockets import WebSocket
 
-BASE_DIR = Path(__file__).parent
+import sys
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+BACKEND_DIR = Path(__file__).resolve().parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
 load_dotenv(BASE_DIR / ".env", override=True)
 
 from pipecat.adapters.llm.schemas.function_schema import FunctionSchema
@@ -71,25 +77,25 @@ if GREETING_AUDIO_PATH.exists():
 
 # Detect active language from spoken script
 def detect_spoken_language(text: str, default_lang: str = "telugu") -> str:
+    lower = text.lower()
+    if "telugu" in lower or any("\u0C00" <= ch <= "\u0C7F" for ch in text):
+        return "telugu"
     for ch in text:
-        if "\u0C00" <= ch <= "\u0C7F":
-            return "telugu"
         if "\u0900" <= ch <= "\u097F":
             return "hindi"
-    if any(ch.isalpha() for ch in text):
-        lower = text.lower()
-        if any(w in lower for w in ["kya", "aap", "hum", "hai", "nahi", "shukriya", "baat", "namaste", "dhanyawad"]):
-            return "hindi"
+    if any(w in lower for w in ["kya", "aap", "hum", "hai", "nahi", "nahin", "shukriya", "baat", "namaste", "dhanyawad", "bolo", "batao", "kahan", "kaun"]):
+        return "hindi"
+    if any(w in lower for w in ["speak in english", "english please", "in english"]):
         return "english"
     return default_lang
 
 # Build system instruction with dynamic real-time date context
-def build_system_instruction() -> str:
+def build_system_instruction(custom_prompt: Optional[str] = None) -> str:
     ist = timezone(timedelta(hours=5, minutes=30))
     now = datetime.now(ist)
     current_date_str = now.strftime("%A, %d %B %Y")
     current_time_str = now.strftime("%I:%M %p")
-    base_prompt = os.getenv("AGENT_SYSTEM_PROMPT", "")
+    base_prompt = (custom_prompt if (custom_prompt and custom_prompt.strip()) else os.getenv("AGENT_SYSTEM_PROMPT", ""))
     temporal_context = (
         f"\n\n### REAL-TIME TEMPORAL CONTEXT\n"
         f"- Today's exact date is: {current_date_str}.\n"
@@ -118,12 +124,42 @@ async def run_vobiz_agent(
     call_uuid: str,
     phone_number: str = "",
     batch_id: Optional[str] = None,
+    template_id: Optional[str] = None,
     vobiz_auth_id: Optional[str] = None,
     vobiz_auth_token: Optional[str] = None,
 ) -> None:
     tracer = diagnostics.get_tracer(call_uuid, phone_number, batch_id=batch_id)
     asyncio.create_task(asyncio.to_thread(db.record_call_start, call_uuid, phone_number=phone_number, batch_id=batch_id))
-    logger.info(f"Starting Pipecat voice agent for call {call_uuid} ({phone_number}, batch={batch_id})")
+    logger.info(f"Starting Pipecat voice agent for call {call_uuid} ({phone_number}, batch={batch_id}, template={template_id})")
+
+    # Resolve dynamic campaign template and greeting for this batch or call
+    batch_doc = db.get_batch(batch_id) if batch_id else None
+
+    # Priority: explicitly passed template_id > batch_doc template_id > dialer fallback
+    active_template_id = template_id or (batch_doc.get("template_id") if batch_doc else None) or "missed_calls"
+    tpl = db.get_template(active_template_id)
+
+    # Resolve greeting text and system prompt from template first, then batch_doc
+    active_greeting = (tpl.get("greeting_telugu") if tpl else None) or (batch_doc.get("greeting_text") if batch_doc else None) or AGENT_GREETING
+    active_system_prompt = (tpl.get("system_prompt") if tpl else None) or (batch_doc.get("system_prompt") if batch_doc else None) or AGENT_SYSTEM_PROMPT
+
+    # Candidate pre-recorded greeting PCM files: strictly match active_template_id
+    greeting_pcm = b""
+    candidates = []
+    if tpl and tpl.get("greeting_audio_path"):
+        candidates.append(BASE_DIR / tpl["greeting_audio_path"])
+    candidates.append(BASE_DIR / "assets" / f"greeting_{active_template_id}_16k.pcm")
+    if active_template_id == "missed_calls" and GREETING_AUDIO_PATH.exists():
+        candidates.append(GREETING_AUDIO_PATH)
+
+    for cand in candidates:
+        if cand.exists():
+            try:
+                greeting_pcm = cand.read_bytes()
+                logger.info(f"Using pre-recorded greeting audio: {cand.name} ({len(greeting_pcm)} bytes, {len(greeting_pcm)/32000:.2f}s)")
+                break
+            except Exception as e:
+                logger.warning(f"Failed reading greeting file {cand}: {e}")
 
     auth_id = vobiz_auth_id or os.getenv("VOBIZ_AUTH_ID", "")
     auth_token = vobiz_auth_token or os.getenv("VOBIZ_AUTH_TOKEN", "")
@@ -153,7 +189,7 @@ async def run_vobiz_agent(
             add_wav_header=False,
             audio_in_sample_rate=16000,
             audio_out_sample_rate=16000,
-            audio_out_10ms_chunks=2,
+            audio_out_10ms_chunks=int(os.getenv("AUDIO_OUT_10MS_CHUNKS", "4")),
             serializer=serializer,
         ),
     )
@@ -219,33 +255,64 @@ async def run_vobiz_agent(
             tracer.record_event("silence_timeout_triggered", {"stage": 1, "silence_duration": timeout_sec, "language": current_language})
             tracer.record_event("proactive_prompt_started", {"language": current_language})
             silence_state = "PROACTIVE_PROMPT_PENDING"
-            instruction = (
-                "[System instruction: The caller has been silent. "
-                "Politely ask if they can hear you in 1 short sentence, speaking naturally in the exact language of the current conversation.]"
-            )
+            lang_prompt = "Telugu" if current_language == "telugu" else ("Hindi" if current_language == "hindi" else "English")
+            instruction = f"[System instruction: The caller has been silent. In {lang_prompt}, politely ask if they can hear you in 1 short sentence.]"
             try:
                 if llm._session:
                     await llm._session.send_realtime_input(text=instruction)
+                    if hasattr(llm, "_complete_turn"):
+                        await llm._complete_turn()
             except Exception as exc:
                 logger.warning(f"Failed to dispatch proactive prompt to Gemini: {exc}")
+
+            # Watchdog: ensure we do not remain stuck in PROACTIVE_PROMPT_PENDING if model turn does not fire
+            async def watchdog_stage2():
+                await asyncio.sleep(6.0)
+                if silence_state == "PROACTIVE_PROMPT_PENDING":
+                    logger.info(f"Proactive prompt timed out for {call_uuid}, advancing to stage 2")
+                    start_silence_timer(stage=2, timeout_sec=10.0)
+
+            asyncio.create_task(watchdog_stage2())
+
         elif stage == 2:
             tracer.record_event("second_silence_timeout", {"stage": 2, "silence_duration": timeout_sec, "language": current_language})
             silence_state = "CLOSING_PENDING"
-            closing_instruction = (
-                "[System instruction: The caller is still silent. "
-                "Politely state that you are unable to hear them, say a courteous goodbye in 1 short sentence, "
-                "speaking naturally in the exact language of the current conversation, and finish.]"
-            )
+            lang_prompt = "Telugu" if current_language == "telugu" else ("Hindi" if current_language == "hindi" else "English")
+            closing_instruction = f"[System instruction: The caller is still silent. In {lang_prompt}, say a polite 1-sentence goodbye and conclude.]"
             try:
                 if llm._session:
                     await llm._session.send_realtime_input(text=closing_instruction)
+                    if hasattr(llm, "_complete_turn"):
+                        await llm._complete_turn()
             except Exception as exc:
                 logger.warning(f"Failed to dispatch closing message to Gemini: {exc}")
 
-    # Disconnect line after dead-air silence following farewell
-    async def inactivity_hangup(delay: float = 8.0):
+            # Watchdog: disconnect cleanly if model closing turn is delayed
+            async def watchdog_closing():
+                nonlocal silence_state
+                await asyncio.sleep(6.0)
+                if silence_state == "CLOSING_PENDING":
+                    logger.info(f"Closing turn timed out for {call_uuid}, terminating line")
+                    silence_state = "TERMINATING"
+                    final_disp = "not_talking" if tracer.turns_count <= 2 else "dropped"
+                    db.record_disposition(call_uuid=call_uuid, disposition=final_disp, reason="Customer silence timeout")
+                    try:
+                        await vobiz_api.hangup_call(call_uuid)
+                    except Exception:
+                        pass
+                    if task_ref[0] and not task_ref[0].has_finished():
+                        await task_ref[0].queue_frame(EndFrame())
+
+            asyncio.create_task(watchdog_closing())
+
+    # Disconnect line cleanly after farewell audio plays out
+    async def inactivity_hangup(delay: float = 2.0):
         await asyncio.sleep(delay)
-        logger.info(f"Silence timeout ({delay}s) reached after farewell for {call_uuid}, terminating call")
+        logger.info(f"Farewell completion hangup for {call_uuid}, terminating call")
+        try:
+            llm.set_audio_input_paused(True)
+        except Exception:
+            pass
         try:
             await vobiz_api.hangup_call(call_uuid)
         except Exception as e:
@@ -260,7 +327,7 @@ async def run_vobiz_agent(
         farewell_concluded = True
         if silence_timer_task[0] and not silence_timer_task[0].done():
             silence_timer_task[0].cancel()
-        silence_state = "IDLE"
+        silence_state = "TERMINATED"
 
         args = params.arguments or {}
         disposition = args.get("disposition") or "dropped"
@@ -291,7 +358,7 @@ async def run_vobiz_agent(
         )
 
         if silence_hangup_task[0] is None or silence_hangup_task[0].done():
-            silence_hangup_task[0] = asyncio.create_task(inactivity_hangup(delay=10.0))
+            silence_hangup_task[0] = asyncio.create_task(inactivity_hangup(delay=2.0))
 
     end_call_function = FunctionSchema(
         name="end_call",
@@ -308,11 +375,11 @@ async def run_vobiz_agent(
             },
             "customer_name": {
                 "type": "string",
-                "description": "Full or first name of caller if provided.",
+                "description": "Full or first name of caller in English Latin letters only (e.g. 'Shiva', 'Ramesh', 'Priya'). Never output in Telugu or Hindi script.",
             },
             "callback_time": {
                 "type": "string",
-                "description": "Agreed callback date and time (e.g. 'Tomorrow 5:00 PM').",
+                "description": "Agreed callback date and time in English only (e.g. 'Today by 5:00 PM', 'Tomorrow 11:00 AM'). Never output in Telugu or Hindi script.",
             },
             "reason": {
                 "type": "string",
@@ -328,13 +395,14 @@ async def run_vobiz_agent(
     llm = GeminiLiveLLMService(
         api_key=get_gemini_api_key(),
         settings=GeminiLiveLLMService.Settings(
-            system_instruction=build_system_instruction(),
+            system_instruction=build_system_instruction(active_system_prompt),
             voice=GEMINI_VOICE,
             model=GEMINI_MODEL,
             vad=GeminiVADParams(
-                end_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,
-                prefix_padding_ms=int(os.getenv("VAD_PREFIX_PADDING_MS", "350")),
-                silence_duration_ms=int(os.getenv("VAD_SILENCE_MS", "300")),
+                start_sensitivity=StartSensitivity.START_SENSITIVITY_LOW,
+                end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
+                prefix_padding_ms=int(os.getenv("VAD_PREFIX_PADDING_MS", "300")),
+                silence_duration_ms=int(os.getenv("VAD_SILENCE_MS", "500")),
             ),
         ),
         tools=tools,
@@ -359,6 +427,10 @@ async def run_vobiz_agent(
     @user_aggregator.event_handler("on_user_turn_message_added")
     async def on_user_spoken(aggregator, message: UserTurnMessageAddedMessage):
         nonlocal farewell_concluded, current_language, silence_state
+        if farewell_concluded or silence_state == "TERMINATED":
+            logger.info(f"Ignoring post-farewell audio turn for {call_uuid}")
+            return
+
         if silence_hangup_task[0] and not silence_hangup_task[0].done():
             silence_hangup_task[0].cancel()
             logger.info(f"Caller spoke after farewell, cancelled silence hangup timer for {call_uuid}")
@@ -388,6 +460,7 @@ async def run_vobiz_agent(
     async def on_agent_turn_started(aggregator):
         nonlocal is_agent_speaking
         is_agent_speaking = True
+        serializer.agent_speaking_started_at = time.time()
         if silence_timer_task[0] and not silence_timer_task[0].done():
             silence_timer_task[0].cancel()
 
@@ -396,6 +469,7 @@ async def run_vobiz_agent(
     async def on_agent_spoken(aggregator, message: AssistantTurnStoppedMessage):
         nonlocal is_agent_speaking, silence_state, current_language
         is_agent_speaking = False
+        serializer.agent_speaking_started_at = 0.0
         if message and message.content:
             text = message.content.strip()
             logger.info(f"[Agent] {text}")
@@ -403,6 +477,12 @@ async def run_vobiz_agent(
             tracer.record_event("agent_turn_completed", {"text": text[:60]})
             db.append_transcript(call_uuid, "agent", text)
             current_language = detect_spoken_language(text, current_language)
+
+            if farewell_concluded or silence_state == "TERMINATED":
+                if silence_hangup_task[0] and not silence_hangup_task[0].done():
+                    silence_hangup_task[0].cancel()
+                silence_hangup_task[0] = asyncio.create_task(inactivity_hangup(delay=1.5))
+                return
 
             if silence_state == "PROACTIVE_PROMPT_PENDING":
                 tracer.record_event("proactive_prompt_completed", {"language": current_language})
@@ -426,7 +506,7 @@ async def run_vobiz_agent(
             elif farewell_concluded:
                 if silence_hangup_task[0] and not silence_hangup_task[0].done():
                     silence_hangup_task[0].cancel()
-                silence_hangup_task[0] = asyncio.create_task(inactivity_hangup(delay=8.0))
+                silence_hangup_task[0] = asyncio.create_task(inactivity_hangup(delay=1.5))
             else:
                 start_silence_timer(stage=1, timeout_sec=15.0)
 
@@ -458,31 +538,32 @@ async def run_vobiz_agent(
         logger.info(f"[TIMING] [{call_uuid[:8]}] 2. Media-stream ready at {t_media:.3f} (+{t_media - t_ans:.3f}s from answer)")
         tracer.record_event("media_stream_ready", {"elapsed_from_answer": round(t_media - t_ans, 3), "stream_id": serializer._stream_id})
 
-        if not CACHED_GREETING_PCM:
+        if not greeting_pcm:
             serializer.is_greeting_playing = False
             llm.set_audio_input_paused(False)
+            logger.info("No pre-recorded greeting audio file found; live model will greet")
             return
 
         t_greet_start = time.time()
         logger.info(f"[TIMING] [{call_uuid[:8]}] 4. Greeting playback start at {t_greet_start:.3f} (+{t_greet_start - t_ans:.3f}s from answer)")
         tracer.record_event("greeting_playback_start", {"elapsed_from_answer": round(t_greet_start - t_ans, 3)})
 
-        asyncio.create_task(asyncio.to_thread(db.append_transcript, call_uuid, "agent", AGENT_GREETING))
+        asyncio.create_task(asyncio.to_thread(db.append_transcript, call_uuid, "agent", active_greeting))
         tracer.turns_count += 1
-        tracer.record_event("agent_turn_completed", {"text": AGENT_GREETING[:60]})
+        tracer.record_event("agent_turn_completed", {"text": active_greeting[:60]})
 
-        chunk = 640
-        frame_sec = 0.02
+        chunk = 1280
+        frame_sec = 0.04
         lead_buffer_s = 0.4
         start_time = time.perf_counter()
         stream_id = serializer._stream_id
         first_chunk_sent = False
 
-        for i in range(0, len(CACHED_GREETING_PCM), chunk):
+        for i in range(0, len(greeting_pcm), chunk):
             if websocket.client_state.name != "CONNECTED":
                 break
 
-            chunk_data = CACHED_GREETING_PCM[i : i + chunk]
+            chunk_data = greeting_pcm[i : i + chunk]
             frame_time = (i / chunk) * frame_sec
             payload = base64.b64encode(chunk_data).decode("utf-8")
             msg = json.dumps({
@@ -545,27 +626,34 @@ async def run_vobiz_agent(
         tracer.record_event("vobiz_stream_connected", {"stream_id": serializer._stream_id})
         tracer.record_event("gemini_session_ready", {"model": GEMINI_MODEL, "voice": GEMINI_VOICE})
         # Seed conversation context so model knows greeting was delivered and waits for customer
+        dev_instruction = (
+            f"Call connected. You have already spoken the opening greeting: '{active_greeting}'. "
+            f"Do not repeat the opening greeting. Listen attentively. "
+            f"Follow the conversation stages and objection handling rules defined in your system prompt. "
+            f"LANGUAGE MIRRORING RULES (STRICT): "
+            f"- You must always speak in the exact language the caller is speaking. "
+            f"- The conversation starts with the opening greeting. "
+            f"- THE MOMENT the caller speaks in Hindi (e.g. 'Haan', 'Bolo', 'Kaun', 'Kya', 'Nahi', 'Kahan se', or Hindi speech), immediately switch to Hindi and continue all turns in Hindi. "
+            f"- If the caller speaks English, converse in English. "
+            f"- STRICT: Speak only 1 single sentence per turn. Never repeat any sentence or utterance. "
+            f"- SILENCE RECOVERY: If you receive a system instruction that caller is silent, ask if they can hear you in 1 short sentence in the active language. If still silent, say polite farewell and stop. "
+            f"- CALLBACK TIME HANDLING: Accept any natural timeframe the caller provides (e.g. '4 PM', 'kal', 'shaam ko', 'Sunday'). Do NOT over-interrogate. Acknowledge timeframe, confirm name, and invoke end_call with disposition='interested'. ALWAYS provide customer_name and callback_time in Latin/English script. "
+            f"- DISPOSITION RULES: Only invoke end_call for interested, not_interested, or wrong_number. Silence timeouts are automated. "
+            f"- When saying goodbye or concluding, speak the single farewell sentence once and stop."
+        ) if greeting_pcm else (
+            f"Call connected. Greet the customer now by speaking this exact opening greeting in a warm, natural tone: '{active_greeting}'. "
+            f"Do not add any other words. Speak only the greeting and wait for customer response."
+        )
+
         context.add_message({
             "role": "developer",
-            "content": (
-                f"Call connected. You have already spoken the opening Telugu greeting: '{AGENT_GREETING}'. "
-                f"Do not repeat the opening greeting. Listen attentively. "
-                f"LANGUAGE RETENTION RULES: "
-                f"- The conversation starts in Telugu. "
-                f"- If the caller says neutral greetings like 'Hello', 'Hi', or 'Haan', DO NOT change language. Remain in Telugu and reply politely in Telugu: 'నమస్తే అండి, నేను అనన్య స్వర్గసీమ నుంచి. మీకు మా ప్రాజెక్ట్స్ గురించి వివరాలు కావాలా అండి?' "
-                f"- ONLY switch language if the caller actually speaks in Hindi (e.g. 'Hindi mein bolo', 'Kaun bol raha hai') or English. "
-                f"- Once the caller switches to Hindi or English, continue in that language for the rest of the conversation. "
-                f"STRICT: Speak only 1 single sentence per turn. Never repeat any sentence or utterance. "
-                f"SILENCE RECOVERY: If you receive a system instruction that the caller is silent, ask if they can hear you in 1 short sentence in the active language of this conversation. If you receive a system instruction that the caller is still silent to close, speak 1 short closing sentence in the active language and stop. "
-                f"CALLBACK TIME HANDLING: If the caller specifies any time (e.g. '1:00 p.m.', 'kal subah', 'tomorrow 10 AM', 'repu'), that is an agreed callback time. Acknowledge the time, ask for their name, and invoke end_call with disposition='interested'. "
-                f"DISPOSITION RULES: NEVER invoke end_call for silence. Silence timeouts are handled automatically by the system. Only invoke end_call for interested, not_interested, or wrong_number. "
-                f"When saying goodbye or concluding, speak the single farewell sentence once and stop."
-            ),
+            "content": dev_instruction,
         })
-        context.add_message({
-            "role": "assistant",
-            "content": AGENT_GREETING,
-        })
+        if greeting_pcm:
+            context.add_message({
+                "role": "assistant",
+                "content": active_greeting,
+            })
         # Seed initial context so Gemini Live sets _ready_for_realtime_input immediately
         await task.queue_frames([LLMContextFrame(context)])
 

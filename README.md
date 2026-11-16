@@ -96,7 +96,7 @@ npm run build
 
 # 2. Start production server
 npm start
-# OR: python -m uvicorn server:app --host 0.0.0.0 --port 8000
+# OR: python -m uvicorn backend.server:app --host 0.0.0.0 --port 8000
 ```
 Open **`http://localhost:8000`** in your browser.
 

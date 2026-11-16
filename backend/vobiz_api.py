@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import httpx
 from loguru import logger
 
-BASE_DIR = Path(__file__).parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env", override=False)
 
 API_BASE = "https://api.vobiz.ai/api/v1"

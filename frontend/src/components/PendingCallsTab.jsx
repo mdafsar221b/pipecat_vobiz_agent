@@ -1,31 +1,54 @@
 import React, { useState, useMemo } from 'react';
+import { format } from 'date-fns';
 import {
-  Calendar,
-  Search,
   PhoneCall,
   Download,
   Database,
   RefreshCw,
-  Filter,
+  X,
 } from 'lucide-react';
+import {
+  Table,
+  TableHeader,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+} from './ui/table';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Separator } from './ui/separator';
+import { DateRangePicker } from './ui/date-range-picker';
+import { StatusFacetedFilter } from './ui/faceted-filter';
+import { cn } from '@/lib/utils';
 
 // Pending missed calls list from CRM with AI disposition tracking and dialer queue actions
 export default function PendingCallsTab({
   crmCalls = [],
   completedCalls = [],
+  templates = [],
+  selectedTemplateId = 'production_callback_conversion',
+  onSelectTemplate,
   isLoadingCrm = false,
   crmError = '',
   onFetchCrmCalls,
   onQueueLeads,
   onTriggerManualDial,
   isDialingManual = false,
+  searchText: externalSearchText,
+  setSearchText: externalSetSearchText,
 }) {
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [searchText, setSearchText] = useState('');
-  const [uniqueOnly, setUniqueOnly] = useState(true);
-  const [aiFilter, setAiFilter] = useState('all');
-  const [crmFilter, setCrmFilter] = useState('all');
+  const [dateRange, setDateRange] = useState(() => {
+    const today = new Date();
+    return { from: today, to: today };
+  });
+  const [internalSearchText, setInternalSearchText] = useState('');
+  const searchText = externalSearchText !== undefined ? externalSearchText : internalSearchText;
+  const setSearchText = externalSetSearchText || setInternalSearchText;
+  const [statusFilter, setStatusFilter] = useState('all');
   const [deselectedPhones, setDeselectedPhones] = useState(new Set());
   const [isQueueing, setIsQueueing] = useState(false);
   const [rangeFrom, setRangeFrom] = useState('');
@@ -71,9 +94,8 @@ export default function PendingCallsTab({
     return null;
   };
 
-  // Filter calls by unique numbers
+  // Unique callers by default
   const sourceCalls = useMemo(() => {
-    if (!uniqueOnly) return crmCalls;
     const seen = new Set();
     const result = [];
     for (const c of crmCalls) {
@@ -81,80 +103,58 @@ export default function PendingCallsTab({
       if (num10 && !seen.has(num10)) {
         seen.add(num10);
         result.push(c);
+      } else if (!num10) {
+        result.push(c);
       }
     }
     return result;
-  }, [crmCalls, uniqueOnly]);
+  }, [crmCalls]);
 
-  // Tally counts across AI voice dispositions and CRM status
+  // Tally counts across lead statuses from telephony_calls
   const dispoCounts = useMemo(() => {
     const counts = {
-      all: sourceCalls.length,
-      uncalled: 0,
-      called: 0,
-      not_answering_busy: 0,
-      interested: 0,
-      not_interested: 0,
-      wrong_number: 0,
-      no_answer: 0,
-      busy: 0,
-      not_talking: 0,
-      dropped: 0,
-      crmPending: 0,
-      crmAttempted: 0,
-      crmCalled: 0,
+      total: sourceCalls.length,
+      pending: 0,
+      attempted: 0,
+      resolved: 0,
     };
     for (const c of sourceCalls) {
-      if (c.status === 'called') counts.crmCalled++;
-      else if (c.status === 'attempted') counts.crmAttempted++;
-      else counts.crmPending++;
-
-      const info = getAiCallInfo(c);
-      const d = (info?.disposition || '').toLowerCase();
-      if (!d) {
-        counts.uncalled++;
+      if (c.status === 'resolved' || c.status === 'called') {
+        counts.resolved++;
+      } else if (c.status === 'attempted') {
+        counts.attempted++;
       } else {
-        counts.called++;
-        if (counts[d] !== undefined) counts[d]++;
-        if (['no_answer', 'busy', 'not_talking', 'dropped'].includes(d)) {
-          counts.not_answering_busy++;
-        }
+        counts.pending++;
       }
     }
     return counts;
-  }, [sourceCalls, completedMap]);
+  }, [sourceCalls]);
 
-  // Filter calls by CRM status, AI disposition and search text
+  // Status options for official faceted filter
+  const statusOptions = useMemo(
+    () => [
+      { value: 'all', label: 'All Missed Calls', count: sourceCalls.length },
+      { value: 'pending', label: 'Pending', count: dispoCounts.pending },
+      { value: 'attempted', label: 'Attempted', count: dispoCounts.attempted },
+      { value: 'resolved', label: 'Resolved', count: dispoCounts.resolved },
+    ],
+    [sourceCalls.length, dispoCounts]
+  );
+
+  // Filter calls by dropdown status and search text
   const filteredCalls = useMemo(() => {
     let result = sourceCalls;
 
-    // 0. CRM Status Filter (all, pending, called)
-    if (crmFilter !== 'all') {
-      result = result.filter((c) => (c.status || 'pending') === crmFilter);
+    if (statusFilter !== 'all') {
+      if (statusFilter === 'pending') {
+        result = result.filter((c) => (c.status || 'pending') === 'pending');
+      } else if (statusFilter === 'attempted') {
+        result = result.filter((c) => c.status === 'attempted');
+      } else if (statusFilter === 'resolved' || statusFilter === 'called') {
+        result = result.filter((c) => c.status === 'resolved' || c.status === 'called');
+      }
     }
 
-    // 1. AI Disposition Filter
-    if (aiFilter !== 'all') {
-      result = result.filter((c) => {
-        const info = getAiCallInfo(c);
-        const d = (info?.disposition || '').toLowerCase();
-        if (aiFilter === 'uncalled') return !d;
-        if (aiFilter === 'called') return Boolean(d);
-        if (aiFilter === 'not_answering_busy') {
-          return ['no_answer', 'busy', 'not_talking', 'dropped'].includes(d);
-        }
-        if (aiFilter === 'interested') return d === 'interested';
-        if (aiFilter === 'not_interested') return d === 'not_interested' || d === 'declined';
-        if (aiFilter === 'wrong_number') return d === 'wrong_number';
-        if (aiFilter === 'no_answer') return d === 'no_answer';
-        if (aiFilter === 'busy') return d === 'busy';
-        if (aiFilter === 'not_talking') return d === 'not_talking';
-        if (aiFilter === 'dropped') return d === 'dropped';
-        return d === aiFilter;
-      });
-    }
-
-    // 2. Text Search
     const query = searchText.trim().toLowerCase();
     if (query) {
       result = result.filter((c) => {
@@ -164,13 +164,15 @@ export default function PendingCallsTab({
           (c.phone_number || '').toLowerCase().includes(query) ||
           (c.customer_name || '').toLowerCase().includes(query) ||
           (c.source || '').toLowerCase().includes(query) ||
+          (c.crm_disposition || '').toLowerCase().includes(query) ||
+          (c.crm_callback_agent || '').toLowerCase().includes(query) ||
           d.includes(query)
         );
       });
     }
 
     return result;
-  }, [sourceCalls, aiFilter, searchText, completedMap]);
+  }, [sourceCalls, statusFilter, searchText, completedMap]);
 
   const selectedCalls = useMemo(() => {
     return filteredCalls.filter((c) => !deselectedPhones.has(c.phone_number));
@@ -255,20 +257,18 @@ export default function PendingCallsTab({
     setDeselectedPhones(next);
   };
 
-  const setDateToday = () => {
-    const d = new Date().toISOString().slice(0, 10);
-    setStartDate(d);
-    setEndDate(d);
-    setDeselectedPhones(new Set());
-    onFetchCrmCalls(d, d);
-  };
-
-  const setDateYesterday = () => {
-    const y = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    setStartDate(y);
-    setEndDate(y);
-    setDeselectedPhones(new Set());
-    onFetchCrmCalls(y, y);
+  const handleDateRangeChange = (range) => {
+    setDateRange(range);
+    if (range?.from) {
+      const fromStr = format(range.from, 'yyyy-MM-dd');
+      setStartDate(fromStr);
+      const toStr = range.to ? format(range.to, 'yyyy-MM-dd') : fromStr;
+      setEndDate(toStr);
+      setDeselectedPhones(new Set());
+      if (range.to) {
+        onFetchCrmCalls(fromStr, toStr);
+      }
+    }
   };
 
   const handleQueueSelected = async () => {
@@ -285,11 +285,12 @@ export default function PendingCallsTab({
     }));
 
     const dateRangeStr = startDate === endDate ? startDate : `${startDate} to ${endDate}`;
-    const aiLabel = aiFilter !== 'all' ? ` [${aiFilter.toUpperCase()}]` : '';
+    const statusLabel = statusFilter !== 'all' ? ` [${statusFilter.toUpperCase()}]` : '';
     const payload = {
       leads,
-      batch_name: `CRM Batch${aiLabel} (${dateRangeStr}) - ${leads.length} calls`,
-      source_filter: `CRM Missed Calls (${dateRangeStr})${aiFilter !== 'all' ? ` - ${aiFilter}` : ''}`,
+      batch_name: `CRM Batch${statusLabel} (${dateRangeStr}) - ${leads.length} calls`,
+      source_filter: `CRM Missed Calls (${dateRangeStr})${statusFilter !== 'all' ? ` - ${statusFilter}` : ''}`,
+      template_id: selectedTemplateId,
     };
 
     try {
@@ -354,344 +355,218 @@ export default function PendingCallsTab({
     );
   };
 
-  const uniqueNote = uniqueOnly
-    ? ` (unique callers, ${crmCalls.length} total raw leads)`
-    : ` (${crmCalls.length} total raw leads)`;
-
   return (
-    <div className="space-y-4">
-      {/* Modern Filter Toolbar */}
-      <div className="bg-slate-50/70 border border-slate-200 p-3.5 space-y-3">
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Date Picker Group */}
-          <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1.5 text-xs">
-            <Calendar className="w-3.5 h-3.5 text-slate-400" />
-            <span className="text-[10px] font-bold uppercase text-slate-400">From</span>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
-            />
-          </div>
-
-          <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1.5 text-xs">
-            <Calendar className="w-3.5 h-3.5 text-slate-400" />
-            <span className="text-[10px] font-bold uppercase text-slate-400">To</span>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
-            />
-          </div>
-
-          <div className="flex gap-1.5">
-            <button
-              onClick={setDateToday}
-              className="px-3 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition"
-            >
-              Today
-            </button>
-            <button
-              onClick={setDateYesterday}
-              className="px-3 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition"
-            >
-              Yesterday
-            </button>
-          </div>
-
-          {/* Search Box */}
-          <div className="relative flex-1 min-w-[200px]">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              placeholder="Search by phone, name, source, or AI disposition..."
-              className="w-full bg-white border border-slate-200 text-slate-800 text-xs pl-8 pr-3 py-1.5 outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792]"
-            />
-          </div>
-
-          {/* Unique Checkbox */}
-          <label className="flex items-center gap-2 text-xs text-slate-700 font-medium cursor-pointer select-none bg-white px-2.5 py-1.5 border border-slate-200">
-            <input
-              type="checkbox"
-              checked={uniqueOnly}
-              onChange={(e) => setUniqueOnly(e.target.checked)}
-              className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
-            />
-            <span>Unique callers only</span>
-          </label>
-        </div>
-
-        {/* Action & AI Disposition Filter Row */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/60">
+    <div className="flex-1 min-h-0 flex flex-col space-y-2.5 h-full">
+      {/* Official shadcn Data Table Toolbar */}
+      <div className="space-y-2 shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* Left: Date Range, Fetch & Status Dropdown */}
           <div className="flex flex-wrap items-center gap-2">
-            <button
+            {/* Official shadcn Date Range Picker */}
+            <DateRangePicker
+              date={dateRange}
+              onDateChange={handleDateRangeChange}
+            />
+
+            {/* Fetch Button */}
+            <Button
+              size="sm"
+              variant="outline"
               onClick={() => onFetchCrmCalls(startDate, endDate)}
               disabled={isLoadingCrm}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition disabled:opacity-40"
+              className="h-8 px-2.5 gap-1.5 text-xs font-medium"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isLoadingCrm ? 'animate-spin text-[#008792]' : ''}`} />
-              <span>{isLoadingCrm ? 'Querying CRM...' : 'Fetch Calls'}</span>
-            </button>
+              <span>{isLoadingCrm ? 'Fetching...' : 'Fetch'}</span>
+            </Button>
 
-            {/* AI Disposition Filter Select */}
-            <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1 text-xs">
-              <Filter className="w-3.5 h-3.5 text-slate-400" />
-              <span className="text-[10px] font-bold uppercase text-slate-400">AI Disposition</span>
-              <select
-                value={aiFilter}
-                onChange={(e) => setAiFilter(e.target.value)}
-                className="outline-none text-slate-800 bg-transparent text-xs font-medium cursor-pointer"
+            {/* Single Unified Status Dropdown Filter */}
+            <StatusFacetedFilter
+              title="Status"
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={statusOptions}
+            />
+
+            {/* Reset Filters Button */}
+            {(statusFilter !== 'all' || searchText) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setStatusFilter('all');
+                  setSearchText('');
+                }}
+                className="h-8 px-2 text-xs font-normal"
               >
-                <option value="all">All Leads ({sourceCalls.length})</option>
-                <option value="uncalled">Uncalled / Never Dialed ({dispoCounts.uncalled || 0})</option>
-                <option value="called">Any AI Call Made ({dispoCounts.called || 0})</option>
-                <option value="not_answering_busy">Not Answering &amp; Busy ({dispoCounts.not_answering_busy || 0})</option>
-                <option value="interested">Interested ({dispoCounts.interested || 0})</option>
-                <option value="not_interested">Not Interested ({dispoCounts.not_interested || 0})</option>
-                <option value="wrong_number">Wrong Number ({dispoCounts.wrong_number || 0})</option>
-                <option value="not_talking">Not Talking ({dispoCounts.not_talking || 0})</option>
-                <option value="no_answer">No Answer ({dispoCounts.no_answer || 0})</option>
-                <option value="busy">Busy ({dispoCounts.busy || 0})</option>
-                <option value="dropped">Dropped ({dispoCounts.dropped || 0})</option>
+                Reset
+                <X className="ml-1 w-3.5 h-3.5" />
+              </Button>
+            )}
+          </div>
+
+          {/* Right: Script & Queue Action */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-muted-foreground text-xs hidden sm:inline">Script:</span>
+              <select
+                value={selectedTemplateId}
+                onChange={(e) => onSelectTemplate?.(e.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2.5 text-xs font-medium text-foreground outline-none cursor-pointer max-w-[180px] truncate"
+              >
+                {templates.map((t) => (
+                  <option key={t.template_id} value={t.template_id}>
+                    {t.name}
+                  </option>
+                ))}
               </select>
             </div>
 
-            {/* Quick Filter: Uncalled */}
-            <button
-              onClick={() => setAiFilter(aiFilter === 'uncalled' ? 'all' : 'uncalled')}
-              className={`px-2.5 py-1 text-xs font-semibold transition border ${
-                aiFilter === 'uncalled'
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-white text-slate-600 hover:bg-slate-100 border-slate-200'
-              }`}
+            <Button
+              size="sm"
+              onClick={handleQueueSelected}
+              disabled={isQueueing || selectedCalls.length === 0}
+              className="h-8 gap-1.5 bg-[#008792] hover:bg-[#007680] text-white text-xs font-semibold"
             >
-              Uncalled ({dispoCounts.uncalled || 0})
-            </button>
-
-            {/* Quick Filter: Retry Queue */}
-            <button
-              onClick={() => setAiFilter(aiFilter === 'not_answering_busy' ? 'all' : 'not_answering_busy')}
-              className={`px-2.5 py-1 text-xs font-semibold transition border ${
-                aiFilter === 'not_answering_busy'
-                  ? 'bg-amber-600 text-white border-amber-600'
-                  : 'bg-white text-amber-800 hover:bg-amber-50 border-amber-300'
-              }`}
-            >
-              Retry Queue ({dispoCounts.not_answering_busy || 0})
-            </button>
-
-            {/* Quick Filter: CRM Pending Callback Only */}
-            <button
-              onClick={() => setCrmFilter(crmFilter === 'pending' ? 'all' : 'pending')}
-              className={`px-2.5 py-1 text-xs font-semibold transition border ${
-                crmFilter === 'pending'
-                  ? 'bg-[#008792] text-white border-[#008792]'
-                  : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-200'
-              }`}
-            >
-              CRM Pending ({dispoCounts.crmPending || 0})
-            </button>
-
-            {/* Quick Filter: CRM Attempted Callbacks */}
-            {dispoCounts.crmAttempted > 0 && (
-              <button
-                onClick={() => setCrmFilter(crmFilter === 'attempted' ? 'all' : 'attempted')}
-                className={`px-2.5 py-1 text-xs font-semibold transition border ${
-                  crmFilter === 'attempted'
-                    ? 'bg-amber-600 text-white border-amber-600'
-                    : 'bg-white text-amber-700 hover:bg-amber-50 border-amber-300'
-                }`}
-              >
-                Attempted ({dispoCounts.crmAttempted || 0})
-              </button>
-            )}
-
-            {(aiFilter !== 'all' || crmFilter !== 'all') && (
-              <button
-                onClick={() => {
-                  setAiFilter('all');
-                  setCrmFilter('all');
-                }}
-                className="text-xs font-semibold text-rose-600 hover:text-rose-700 bg-white border border-rose-200 px-2.5 py-1 transition"
-              >
-                Reset Filter
-              </button>
-            )}
+              <Download className="w-3.5 h-3.5" />
+              <span>
+                {isQueueing
+                  ? 'Queueing...'
+                  : `Queue to Dialer (${selectedCalls.length})`}
+              </span>
+            </Button>
           </div>
+        </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Quick Selection & Custom Range Controls */}
-            <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1 text-xs">
-              <span className="text-[10px] font-bold uppercase text-slate-400 select-none">Select:</span>
-              <button
-                type="button"
-                onClick={() => selectTopN(20)}
-                className={`px-2 py-0.5 text-xs font-semibold transition border ${
-                  rangeFrom === '1' && rangeTo === '20' && selectedCalls.length === 20 && selectedCalls.length < filteredCalls.length
-                    ? 'bg-[#008792] text-white border-[#008792]'
-                    : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200'
-                }`}
-                title="Select top 20 leads (1 to 20)"
-              >
-                Top 20
-              </button>
-              <button
-                type="button"
-                onClick={() => selectTopN(50)}
-                className={`px-2 py-0.5 text-xs font-semibold transition border ${
-                  rangeFrom === '1' && rangeTo === '50' && selectedCalls.length === 50 && selectedCalls.length < filteredCalls.length
-                    ? 'bg-[#008792] text-white border-[#008792]'
-                    : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200'
-                }`}
-                title="Select top 50 leads (1 to 50)"
-              >
-                Top 50
-              </button>
-              <button
-                type="button"
+        {/* Selection & Counts Sub-bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-1.5 text-xs text-muted-foreground border border-border/80 bg-muted/30 rounded-md">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-foreground">
+              {selectedCalls.length} of {filteredCalls.length} selected
+            </span>
+            <Separator orientation="vertical" className="h-3.5" />
+            <div className="flex items-center gap-1">
+              <Button
+                size="xs"
+                variant={allSelected ? 'secondary' : 'ghost'}
                 onClick={() => selectTopN(filteredCalls.length)}
-                className={`px-2 py-0.5 text-xs font-semibold transition border ${
-                  allSelected
-                    ? 'bg-[#008792] text-white border-[#008792]'
-                    : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200'
-                }`}
-                title="Select all filtered leads"
+                className="h-6 px-2 text-xs font-medium"
               >
                 All
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
                 onClick={() => {
                   setRangeFrom('');
                   setRangeTo('');
                   selectRange(0, 0);
                 }}
-                className="px-2 py-0.5 text-xs font-semibold bg-slate-50 hover:bg-slate-100 text-slate-500 border border-slate-200 transition"
-                title="Deselect all"
+                className="h-6 px-2 text-xs text-muted-foreground"
               >
-                None
-              </button>
-
-              <span className="h-3.5 w-px bg-slate-200 mx-0.5" />
-
-              {/* Custom Range: From X to Y */}
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] font-bold uppercase text-slate-400 select-none">From</span>
-                <input
-                  type="number"
-                  min="1"
-                  max={filteredCalls.length || 1000}
-                  value={rangeFrom}
-                  onChange={(e) => setRangeFrom(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      selectRange(rangeFrom, rangeTo);
-                    }
-                  }}
-                  placeholder="1"
-                  className="w-14 px-1.5 py-0.5 text-xs border border-slate-200 text-slate-800 text-center outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792]"
-                  title="Starting lead index (e.g. 50)"
-                />
-                <span className="text-[10px] font-bold uppercase text-slate-400 select-none">To</span>
-                <input
-                  type="number"
-                  min="1"
-                  max={filteredCalls.length || 1000}
-                  value={rangeTo}
-                  onChange={(e) => setRangeTo(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      selectRange(rangeFrom, rangeTo);
-                    }
-                  }}
-                  placeholder={String(Math.min(50, filteredCalls.length || 50))}
-                  className="w-14 px-1.5 py-0.5 text-xs border border-slate-200 text-slate-800 text-center outline-none focus:ring-1 focus:ring-[#008792] focus:border-[#008792]"
-                  title="Ending lead index (e.g. 100)"
-                />
-                <button
-                  type="button"
-                  onClick={() => selectRange(rangeFrom, rangeTo)}
-                  disabled={!rangeFrom && !rangeTo}
-                  className="px-2 py-0.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition disabled:opacity-40"
-                  title="Apply custom index range"
-                >
-                  Apply
-                </button>
-              </div>
+                Clear
+              </Button>
             </div>
 
-            <button
-              onClick={handleQueueSelected}
-              disabled={isQueueing || selectedCalls.length === 0}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white transition disabled:opacity-40 cursor-pointer shadow-sm"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>
-                {isQueueing
-                  ? 'Queueing to Dialer...'
-                  : `Queue Selected to Dialer (${selectedCalls.length})`}
-              </span>
-            </button>
+            <div className="hidden sm:flex items-center gap-1 pl-1">
+              <span className="text-[11px] text-muted-foreground">Range:</span>
+              <Input
+                type="number"
+                min="1"
+                max={filteredCalls.length || 1000}
+                value={rangeFrom}
+                onChange={(e) => setRangeFrom(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    selectRange(rangeFrom, rangeTo);
+                  }
+                }}
+                placeholder="1"
+                className="w-12 h-6 px-1 text-center text-xs bg-background"
+              />
+              <span className="text-[11px] text-muted-foreground">to</span>
+              <Input
+                type="number"
+                min="1"
+                max={filteredCalls.length || 1000}
+                value={rangeTo}
+                onChange={(e) => setRangeTo(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    selectRange(rangeFrom, rangeTo);
+                  }
+                }}
+                placeholder={String(Math.min(50, filteredCalls.length || 50))}
+                className="w-12 h-6 px-1 text-center text-xs bg-background"
+              />
+              <Button
+                size="xs"
+                variant="outline"
+                type="button"
+                onClick={() => selectRange(rangeFrom, rangeTo)}
+                disabled={!rangeFrom && !rangeTo}
+                className="h-6 px-1.5 text-xs font-normal"
+              >
+                Apply
+              </Button>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Pending Calls Table with Nugget High-Contrast Styling */}
-      <div className="overflow-x-auto max-h-[540px] border border-slate-200 bg-white">
-        <table className="w-full border-collapse text-left text-xs">
-          <thead>
-            <tr className="bg-slate-50/90 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px] sticky top-0 z-10 backdrop-blur-sm">
-              <th className="w-10 px-3.5 py-3">
+      {/* Pending Calls Table using shadcn Table */}
+      <div className="flex-1 min-h-0 overflow-auto border border-border rounded-lg bg-card shadow-xs">
+        <Table>
+          <TableHeader className="bg-muted/80 sticky top-0 z-10 backdrop-blur-xs">
+            <TableRow className="hover:bg-transparent border-b">
+              <TableHead className="w-8 px-2 py-1">
                 <input
                   ref={selectAllRef}
                   type="checkbox"
                   checked={allSelected}
                   onChange={toggleSelectAll}
-                  className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
+                  className="w-3.5 h-3.5 rounded border-input text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
                 />
-              </th>
-              <th className="w-8 px-2 py-3 text-slate-400 font-mono text-[10px]">#</th>
-              <th className="px-3.5 py-3">Customer Number</th>
-              <th className="px-3.5 py-3">Customer Name</th>
-              <th className="px-3.5 py-3">Marketing Source</th>
-              <th className="px-3.5 py-3">Missed Agent</th>
-              <th className="px-3.5 py-3">Missed Time</th>
-              <th className="px-3.5 py-3">Ring</th>
-              <th className="px-3.5 py-3">CRM Status</th>
-              <th className="px-3.5 py-3">AI Disposition</th>
-              <th className="px-3.5 py-3 text-right">Action</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
+              </TableHead>
+              <TableHead className="w-7 px-1.5 py-1 text-muted-foreground font-mono text-[10px]">#</TableHead>
+              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Customer Number</TableHead>
+              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Customer Name</TableHead>
+              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Marketing Source</TableHead>
+              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Missed Agent</TableHead>
+              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Missed Time</TableHead>
+              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Ring</TableHead>
+              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">CRM Status</TableHead>
+              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">CRM Disposition</TableHead>
+              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">AI Disposition</TableHead>
+              <TableHead className="px-2.5 py-1 text-right whitespace-nowrap text-xs">Action</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {isLoadingCrm ? (
-              <tr>
-                <td colSpan="11" className="text-center text-slate-400 py-12">
+              <TableRow>
+                <TableCell colSpan={12} className="text-center text-muted-foreground py-12">
                   <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
                   <span className="font-medium text-xs">Querying MongoDB CRM for inbound missed leads...</span>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : crmError ? (
-              <tr>
-                <td colSpan="11" className="text-center text-rose-600 py-8 bg-rose-50/40">
+              <TableRow>
+                <TableCell colSpan={12} className="text-center text-rose-600 py-8 bg-rose-50/40">
                   <span className="font-semibold text-xs">Failed to load calls from CRM: {crmError}</span>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : filteredCalls.length === 0 ? (
-              <tr>
-                <td colSpan="11" className="text-center text-slate-400 py-12">
+              <TableRow>
+                <TableCell colSpan={12} className="text-center text-muted-foreground py-12">
                   <span className="text-xs font-medium">
                     {crmCalls.length === 0
                       ? "Click 'Fetch Calls' above to load pending leads from CRM."
                       : 'No calls match the current search or AI disposition filter.'}
                   </span>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : (
               filteredCalls.map((c, idx) => {
                 const timeStr = c.createdAt
@@ -703,96 +578,108 @@ export default function PendingCallsTab({
                 const isChecked = !deselectedPhones.has(c.phone_number);
 
                 return (
-                  <tr
+                  <TableRow
                     key={c.id || idx}
-                    className={`hover:bg-slate-50/80 transition-colors ${
-                      isChecked ? 'bg-[#008792]/5' : ''
-                    }`}
+                    className={isChecked ? 'bg-[#008792]/5' : ''}
                   >
-                    <td className="px-3.5 py-3">
+                    <TableCell className="w-8 px-2 py-1.5">
                       <input
                         type="checkbox"
                         checked={isChecked}
                         onChange={() => togglePhone(c.phone_number)}
-                        className="text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
+                        className="w-3.5 h-3.5 rounded border-input text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
                       />
-                    </td>
-                    <td className="px-2 py-3 font-mono text-[11px] text-slate-400 whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="w-7 px-1.5 py-1.5 font-mono text-[10px] text-muted-foreground whitespace-nowrap">
                       {idx + 1}
-                    </td>
-                    <td className="px-3.5 py-3 font-mono font-bold text-slate-900 whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="px-2.5 py-1.5 font-mono text-xs font-semibold text-foreground whitespace-nowrap">
                       {c.phone_number}
-                    </td>
-                    <td className="px-3.5 py-3 font-medium text-slate-700 whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="px-2.5 py-1.5 font-medium text-foreground whitespace-nowrap text-xs">
                       {c.customer_name || '--'}
-                    </td>
-                    <td className="px-3.5 py-3 text-slate-600 whitespace-nowrap">
-                      <span className="inline-block bg-slate-100 text-slate-700 px-2 py-0.5 text-[11px] font-medium">
+                    </TableCell>
+                    <TableCell className="px-2.5 py-1.5 text-muted-foreground whitespace-nowrap">
+                      <span className="text-[11px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
                         {c.source || c.campaign || '--'}
                       </span>
-                    </td>
-                    <td className="px-3.5 py-3 text-slate-600 whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="px-2.5 py-1.5 text-muted-foreground whitespace-nowrap text-xs">
                       {(c.missedAgents && c.missedAgents[0]) || 'Queue'}
-                    </td>
-                    <td className="px-3.5 py-3 font-mono text-slate-500 whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="px-2.5 py-1.5 font-mono text-muted-foreground whitespace-nowrap text-xs">
                       {timeStr}
-                    </td>
-                    <td className="px-3.5 py-3 font-mono text-slate-500 whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="px-2.5 py-1.5 font-mono text-muted-foreground whitespace-nowrap text-xs">
                       {c.duration || 0}s
-                    </td>
-                    <td className="px-3.5 py-3 whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
                       <span
-                        className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 border ${
-                          c.status === 'called'
-                            ? 'bg-slate-100 text-slate-600 border-slate-200'
+                        className={cn(
+                          "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border",
+                          c.status === 'resolved' || c.status === 'called'
+                            ? 'border-border bg-muted/40 text-muted-foreground'
                             : c.status === 'attempted'
-                            ? 'bg-amber-50 text-amber-700 border-amber-200'
-                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        }`}
+                            ? 'border-amber-500/30 bg-amber-50 text-amber-700'
+                            : 'border-emerald-500/30 bg-emerald-50 text-emerald-700'
+                        )}
                       >
-                        {c.status === 'called' ? 'Called' : c.status === 'attempted' ? 'Attempted' : 'Pending'}
+                        {c.status === 'resolved' || c.status === 'called' ? 'Resolved' : c.status === 'attempted' ? 'Attempted' : 'Pending'}
                       </span>
-                    </td>
-                    <td className="px-3.5 py-3 whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
+                      {c.crm_disposition ? (
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-foreground">
+                            {c.crm_disposition}
+                          </span>
+                          {c.crm_callback_agent && (
+                            <span className="text-[9px] text-muted-foreground font-mono">
+                              ({c.crm_callback_agent})
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">--</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
                       {renderAiBadge(c)}
-                    </td>
-                    <td className="px-3.5 py-3 text-right whitespace-nowrap">
-                      <button
+                    </TableCell>
+                    <TableCell className="px-2.5 py-1.5 text-right whitespace-nowrap">
+                      <Button
+                        size="xs"
+                        variant="outline"
                         onClick={() => onTriggerManualDial(c.phone_number, c.customer_name || '')}
                         disabled={isDialingManual}
-                        className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-[#008792]/10 hover:text-[#008792] hover:border-[#008792]/30 transition disabled:opacity-40"
+                        className="h-6 gap-1 px-2 text-xs font-semibold text-[#008792]"
                       >
                         <PhoneCall className="w-3 h-3" />
                         <span>Dial</span>
-                      </button>
-                    </td>
-                  </tr>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
                 );
               })
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
       {/* Footer Info */}
-      <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+      <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
         <span>
-          Showing <strong className="text-slate-800">{filteredCalls.length}</strong> of{' '}
-          <strong className="text-slate-800">{sourceCalls.length}</strong> leads{uniqueNote}
-          {crmFilter !== 'all' && (
-            <span className="text-emerald-700 font-semibold ml-1.5">
-              (CRM: {crmFilter})
-            </span>
-          )}
-          {aiFilter !== 'all' && (
-            <span className="text-[#008792] font-semibold ml-1.5">
-              (AI: {aiFilter.replace(/_/g, ' ')})
+          Showing <strong className="text-foreground">{filteredCalls.length}</strong> of{' '}
+          <strong className="text-foreground">{sourceCalls.length}</strong> unique leads
+          {statusFilter !== 'all' && (
+            <span className="text-foreground font-semibold ml-1.5">
+              (Status: {statusFilter})
             </span>
           )}
         </span>
-        <div className="flex items-center gap-1.5 text-slate-400">
+        <div className="flex items-center gap-1.5 text-muted-foreground">
           <Database className="w-3.5 h-3.5" />
-          <span>MongoDB CRM: <strong className="font-mono text-slate-600">realestate_db</strong></span>
+          <span>MongoDB CRM: <strong className="font-mono text-foreground">telephony_calls</strong></span>
         </div>
       </div>
     </div>

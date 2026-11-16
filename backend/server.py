@@ -27,9 +27,14 @@ class PollingEndpointFilter(logging.Filter):
         except Exception:
             return True
 
-logging.getLogger("uvicorn.access").addFilter(PollingEndpointFilter())
+import sys
 
-load_dotenv(override=True)
+BASE_DIR = Path(__file__).resolve().parent.parent
+BACKEND_DIR = Path(__file__).resolve().parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+load_dotenv(BASE_DIR / ".env", override=True)
 
 import db
 import diagnostics
@@ -37,7 +42,6 @@ import vobiz_api
 from agent import run_vobiz_agent
 from dialer import dialer
 
-BASE_DIR = Path(__file__).parent
 PORT = int(os.getenv("PORT", os.getenv("HTTP_PORT", "8000")))
 STREAM_CONTENT_TYPE = os.getenv("STREAM_CONTENT_TYPE", "audio/x-l16;rate=16000")
 
@@ -88,7 +92,6 @@ app.add_middleware(
 
 FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
 FRONTEND_INDEX = FRONTEND_DIST / "index.html"
-LEGACY_INDEX = BASE_DIR / "templates" / "index.html"
 
 # Mount frontend assets if compiled React bundle exists
 if (FRONTEND_DIST / "assets").exists():
@@ -99,9 +102,7 @@ if (FRONTEND_DIST / "assets").exists():
 async def serve_ui():
     if FRONTEND_INDEX.exists():
         return HTMLResponse(content=FRONTEND_INDEX.read_text(encoding="utf-8"))
-    if LEGACY_INDEX.exists():
-        return HTMLResponse(content=LEGACY_INDEX.read_text(encoding="utf-8"))
-    return HTMLResponse(content="<h1>UI Template Not Found</h1>", status_code=404)
+    return HTMLResponse(content="<h1>Frontend build not found. Run 'npm run build' in frontend directory.</h1>", status_code=404)
 
 # Health status endpoint
 @app.get("/health")
@@ -146,7 +147,9 @@ async def answer_call(request: Request):
     call_short = call_uuid[:8] if call_uuid else "unknown"
     logger.info(f"[TIMING] [{call_short}] 1. Call answered at {t_answer:.3f} ({datetime.now().strftime('%H:%M:%S.%f')[:-3]})")
     logger.info(f"Vobiz Answer Callback: call_uuid={call_uuid}, to={to_number}, from={from_number}")
-    batch_id = params.get("batch_id") or (dialer.active_call.get("batch_id") if dialer.active_call else None) or dialer.current_batch_id
+    active_call_meta = dialer.active_call if (dialer.active_call and (not call_uuid or dialer.active_call.get("call_uuid") == call_uuid)) else {}
+    batch_id = params.get("batch_id") or active_call_meta.get("batch_id")
+    template_id = params.get("template_id") or active_call_meta.get("template_id") or dialer.selected_template_id
     asyncio.create_task(asyncio.to_thread(db.record_call_start, call_uuid, phone_number=to_number, batch_id=batch_id, metadata=params))
     dialer.set_call_status(call_uuid, "in_call")
     tracer = diagnostics.get_tracer(call_uuid, phone_number=to_number, batch_id=batch_id)
@@ -156,7 +159,7 @@ async def answer_call(request: Request):
     public_url = get_public_url()
     status_callback = xml_escape(f"{public_url}/stream-status")
     rec_callback = xml_escape(f"{public_url}/recording-callback?batch_id={batch_id or ''}&to={to_number}")
-    ws_stream_url = get_ws_url(f"/ws?call_uuid={call_uuid}&to={to_number}&batch_id={batch_id or ''}")
+    ws_stream_url = get_ws_url(f"/ws?call_uuid={call_uuid}&to={to_number}&batch_id={batch_id or ''}&template_id={template_id or ''}")
 
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -236,6 +239,7 @@ async def websocket_endpoint(websocket: WebSocket):
     call_uuid = query_params.get("call_uuid", "unknown_call")
     to_number = query_params.get("to", "")
     batch_id = query_params.get("batch_id") or (dialer.active_call.get("batch_id") if dialer.active_call else None) or dialer.current_batch_id
+    template_id = query_params.get("template_id") or (dialer.active_call.get("template_id") if dialer.active_call else None) or dialer.selected_template_id
     dialer.set_call_status(call_uuid, "in_call")
     tracer = diagnostics.get_tracer(call_uuid, phone_number=to_number, batch_id=batch_id)
 
@@ -245,6 +249,7 @@ async def websocket_endpoint(websocket: WebSocket):
             call_uuid=call_uuid,
             phone_number=to_number,
             batch_id=batch_id,
+            template_id=template_id,
         )
         tracer.record_ws_close(1000, "Normal Closure")
     except WebSocketDisconnect as ws_disc:
@@ -277,9 +282,10 @@ async def trigger_dial(request: Request):
             )
 
         public_url = get_public_url()
-        answer_url = f"{public_url}/answer"
-        hangup_url = f"{public_url}/hangup"
         from_number = payload.get("from")
+        template_id = payload.get("template_id") or dialer.selected_template_id
+        answer_url = f"{public_url}/answer?to={to_number}&template_id={template_id}"
+        hangup_url = f"{public_url}/hangup"
 
         try:
             result = await vobiz_api.place_call(
@@ -294,6 +300,7 @@ async def trigger_dial(request: Request):
                 phone_number=to_number,
                 customer_name=payload.get("customer_name", ""),
                 status="dialing",
+                template_id=template_id,
             )
             db.record_call_start(
                 call_uuid=call_uuid,
@@ -326,8 +333,66 @@ async def queue_campaign_leads(request: Request):
     leads = payload.get("leads", [])
     batch_name = payload.get("batch_name")
     source_filter = payload.get("source_filter")
-    batch_id = dialer.queue_leads(leads, batch_name=batch_name, source_filter=source_filter)
+    template_id = payload.get("template_id")
+    batch_id = dialer.queue_leads(
+        leads,
+        batch_name=batch_name,
+        source_filter=source_filter,
+        template_id=template_id,
+    )
     return {"ok": True, "batch_id": batch_id, "queued": len(leads)}
+
+# List all campaign templates
+@app.get("/api/campaign/templates")
+async def list_campaign_templates():
+    return {
+        "ok": True,
+        "templates": db.get_templates(),
+        "selected_template_id": dialer.selected_template_id,
+    }
+
+# Retrieve specific campaign template
+@app.get("/api/campaign/templates/{template_id}")
+async def get_campaign_template(template_id: str):
+    tpl = db.get_template(template_id)
+    if not tpl:
+        return JSONResponse(status_code=404, content={"ok": False, "error": f"Template {template_id} not found"})
+    return {"ok": True, "template": tpl}
+
+# Update a campaign template
+@app.put("/api/campaign/templates/{template_id}")
+async def update_campaign_template(template_id: str, request: Request):
+    body = await request.json()
+    body["template_id"] = template_id
+    res = db.save_template(body)
+    return res
+
+# Create a new campaign template
+@app.post("/api/campaign/templates")
+async def create_campaign_template(request: Request):
+    body = await request.json()
+    res = db.save_template(body)
+    return res
+
+# Delete a campaign template
+@app.delete("/api/campaign/templates/{template_id}")
+async def delete_campaign_template(template_id: str):
+    if template_id == "missed_calls":
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Cannot delete core default template"})
+    success = db.delete_template(template_id)
+    if success and dialer.selected_template_id == template_id:
+        dialer.set_selected_template("missed_calls")
+    return {"ok": success}
+
+# Select active campaign template for ad-hoc dials and upcoming batches
+@app.post("/api/campaign/select-template")
+async def select_campaign_template(request: Request):
+    body = await request.json()
+    tpl_id = body.get("template_id")
+    if not tpl_id:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Missing template_id"})
+    dialer.set_selected_template(tpl_id)
+    return {"ok": True, "selected_template_id": dialer.selected_template_id}
 
 # Start OBD automated calling
 @app.post("/api/campaign/start")
@@ -375,6 +440,18 @@ async def list_campaign_batches():
 async def get_batch_detail(batch_id: str):
     detail = db.get_batch_detail(batch_id)
     return {"ok": True, **detail}
+
+# Re-run a campaign batch
+@app.post("/api/campaign/batches/{batch_id}/rerun")
+async def rerun_campaign_batch(batch_id: str, request: Request):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    mode = body.get("mode", "all")
+    result = dialer.rerun_batch(batch_id, mode=mode)
+    return result
 
 # Delete a campaign batch
 @app.delete("/api/campaign/batches/{batch_id}")
@@ -434,5 +511,22 @@ async def list_calls(
 ):
     return db.get_recent_calls(limit=limit, start_date=start_date, end_date=end_date)
 
+# Update call record fields like disposition and callback time
+@app.api_route("/api/call/{call_uuid}", methods=["PATCH", "POST"])
+async def update_call_record(call_uuid: str, request: Request):
+    payload = await parse_params(request)
+    updates: Dict[str, Any] = {}
+    if "disposition" in payload and payload["disposition"] is not None:
+        updates["disposition"] = str(payload["disposition"]).strip().lower()
+    if "callback_time" in payload and payload["callback_time"] is not None:
+        updates["callback_time"] = str(payload["callback_time"]).strip()
+    if "customer_name" in payload and payload["customer_name"] is not None:
+        updates["customer_name"] = str(payload["customer_name"]).strip()
+    if not updates:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "No update fields provided"})
+    db.update_call(call_uuid, updates)
+    return {"ok": True, "call_uuid": call_uuid, "updates": updates}
+
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=PORT, reload=True)
+    reload_enabled = os.getenv("UVICORN_RELOAD", "false").lower() == "true"
+    uvicorn.run("server:app", host="0.0.0.0", port=PORT, reload=reload_enabled)
