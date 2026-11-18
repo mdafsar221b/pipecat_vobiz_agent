@@ -2,6 +2,9 @@ import path from 'path'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
+const BACKEND_PORT = process.env.BACKEND_PORT || process.env.PORT || '8010'
+const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`
+
 // Configure Vite with dev proxy to FastAPI server and shadcn path alias
 export default defineConfig({
   plugins: [react()],
@@ -11,18 +14,18 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: 3002,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: BACKEND_URL,
         changeOrigin: true,
       },
       '/calls': {
-        target: 'http://127.0.0.1:8000',
+        target: BACKEND_URL,
         changeOrigin: true,
       },
       '/health': {
-        target: 'http://127.0.0.1:8000',
+        target: BACKEND_URL,
         changeOrigin: true,
       },
     },

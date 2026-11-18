@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Menu, X, Search } from 'lucide-react';
+import { Menu, X, Search, LogOut, Radio } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import { SidebarProvider, SidebarInset, SidebarTrigger } from './components/ui/sidebar';
 import { Separator } from './components/ui/separator';
@@ -12,13 +12,44 @@ import PendingCallsTab from './components/PendingCallsTab';
 import BatchesTab from './components/BatchesTab';
 import CompletedLogsTab from './components/CompletedLogsTab';
 import TemplatesTab from './components/TemplatesTab';
+import UsersTab from './components/UsersTab';
+import AuthPages from './components/auth/AuthPages';
 import ErrorBoundary from './components/ErrorBoundary';
+import {
+  getAuthToken,
+  setAuthToken,
+  getStoredUser,
+  setStoredUser,
+  clearAuth,
+  apiFetch,
+} from './utils/auth';
 
-// Main Swargaseema AI Telephony Console Application with full-width Left Sidebar Layout
+// Main Swargaseema AI Telephony Console Application with Multi-User & Parallel Concurrency
 export default function App() {
+  // Authentication & Session State
+  const [currentUser, setCurrentUser] = useState(() => getStoredUser());
+  const [authToken, setAuthTokenState] = useState(() => getAuthToken());
+
+  // URL Query Params check (for direct activation or password reset links)
+  const [urlToken, setUrlToken] = useState(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      return p.get('token') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [urlMode, setUrlMode] = useState(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      return p.get('mode') || 'activate';
+    } catch {
+      return 'activate';
+    }
+  });
+
   const [activeNav, setActiveNav] = useState('live');
   const [alertMessage, setAlertMessage] = useState('');
-  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [headerSearch, setHeaderSearch] = useState('');
 
   // Campaign & Live HUD State
@@ -29,6 +60,8 @@ export default function App() {
     active_calls: [],
     next_call: null,
     last_completed_call: null,
+    channels_active: 0,
+    max_concurrency: 20,
   });
 
   const [manualPhone, setManualPhone] = useState('+917007173798');
@@ -54,14 +87,53 @@ export default function App() {
 
   const wasCallActiveRef = useRef(false);
 
+  // Handle Logout
+  const handleLogout = useCallback(() => {
+    clearAuth();
+    setCurrentUser(null);
+    setAuthTokenState('');
+  }, []);
+
+  // Listen for unauthorized 401 events from apiFetch
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      clearAuth();
+      setCurrentUser(null);
+      setAuthTokenState('');
+      setAlertMessage('Session expired. Please sign in again.');
+    };
+    window.addEventListener('auth:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
+  }, []);
+
+  // Re-verify logged in user on mount
+  useEffect(() => {
+    if (!authToken) return;
+    apiFetch('/api/auth/me')
+      .then((res) => {
+        if (res.ok) return res.json();
+        throw new Error('Session invalid');
+      })
+      .then((data) => {
+        if (data.user) {
+          setCurrentUser(data.user);
+          setStoredUser(data.user);
+        }
+      })
+      .catch(() => {
+        // If server 401s, apiFetch already dispatches auth:unauthorized
+      });
+  }, [authToken]);
+
   // Fetch Completed Call Logs with optional date range
   const fetchCompletedLogs = useCallback(async (startDate, endDate) => {
+    if (!getAuthToken()) return;
     setIsLoadingLogs(true);
     try {
       let url = '/calls?limit=500';
       if (startDate) url += `&start_date=${encodeURIComponent(startDate)}`;
       if (endDate) url += `&end_date=${encodeURIComponent(endDate)}`;
-      const res = await fetch(url);
+      const res = await apiFetch(url);
       if (!res.ok) return;
       const list = await res.json();
       setCompletedCalls(list || []);
@@ -74,8 +146,9 @@ export default function App() {
 
   // Poll Campaign Status
   const fetchCampaignStatus = useCallback(async () => {
+    if (!getAuthToken()) return;
     try {
-      const res = await fetch('/api/campaign/status');
+      const res = await apiFetch('/api/campaign/status');
       if (!res.ok) return;
       const data = await res.json();
       setCampaignData(data);
@@ -121,6 +194,7 @@ export default function App() {
 
   // Fetch CRM Pending Calls
   const fetchCrmPendingCalls = useCallback(async (startDate, endDate) => {
+    if (!getAuthToken()) return;
     const today = new Date().toISOString().slice(0, 10);
     const start = startDate || today;
     const end = endDate || today;
@@ -128,7 +202,7 @@ export default function App() {
     setIsLoadingCrm(true);
     setCrmError('');
     try {
-      const res = await fetch(`/api/crm/pending-calls?start_date=${start}&end_date=${end}&status=all`);
+      const res = await apiFetch(`/api/crm/pending-calls?start_date=${start}&end_date=${end}&status=all`);
       const data = await res.json();
       if (!res.ok || !data.ok) {
         const err = data.error || 'Failed to query CRM';
@@ -148,9 +222,10 @@ export default function App() {
 
   // Fetch Batches
   const fetchBatches = useCallback(async () => {
+    if (!getAuthToken()) return;
     setIsLoadingBatches(true);
     try {
-      const res = await fetch('/api/campaign/batches');
+      const res = await apiFetch('/api/campaign/batches');
       if (!res.ok) return;
       const data = await res.json();
       setBatches(data.batches || []);
@@ -163,8 +238,9 @@ export default function App() {
 
   // Fetch Campaign Strategy Templates
   const fetchCampaignTemplates = useCallback(async () => {
+    if (!getAuthToken()) return;
     try {
-      const res = await fetch('/api/campaign/templates');
+      const res = await apiFetch('/api/campaign/templates');
       if (!res.ok) return;
       const data = await res.json();
       setTemplates(data.templates || []);
@@ -180,7 +256,7 @@ export default function App() {
   const handleSelectTemplate = async (templateId) => {
     setSelectedTemplateId(templateId);
     try {
-      await fetch('/api/campaign/select-template', {
+      await apiFetch('/api/campaign/select-template', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ template_id: templateId }),
@@ -191,8 +267,10 @@ export default function App() {
     }
   };
 
-  // Initial Load and Adaptive Polling (1.5s when dialing/in-call, 4s when idle; pauses when tab hidden)
+  // Initial Load and Adaptive Polling
   useEffect(() => {
+    if (!currentUser || !authToken) return;
+
     fetchCampaignTemplates();
     fetchCrmPendingCalls();
     fetchCampaignStatus();
@@ -203,18 +281,28 @@ export default function App() {
     const delay = isBusy ? 1500 : 4000;
 
     const timer = setInterval(() => {
-      if (!document.hidden) {
+      if (!document.hidden && getAuthToken()) {
         fetchCampaignStatus();
       }
     }, delay);
 
     return () => clearInterval(timer);
-  }, [fetchCampaignTemplates, fetchCampaignStatus, fetchCrmPendingCalls, fetchCompletedLogs, fetchBatches, campaignData?.status, (campaignData?.active_calls || []).length]);
+  }, [
+    currentUser,
+    authToken,
+    fetchCampaignTemplates,
+    fetchCampaignStatus,
+    fetchCrmPendingCalls,
+    fetchCompletedLogs,
+    fetchBatches,
+    campaignData?.status,
+    (campaignData?.active_calls || []).length,
+  ]);
 
   // Campaign Actions
   const handleStartCampaign = async () => {
     try {
-      const res = await fetch('/api/campaign/start', { method: 'POST' });
+      const res = await apiFetch('/api/campaign/start', { method: 'POST' });
       const data = await res.json();
       if (data.ok) {
         fetchCampaignStatus();
@@ -226,7 +314,7 @@ export default function App() {
 
   const handlePauseCampaign = async () => {
     try {
-      await fetch('/api/campaign/pause', { method: 'POST' });
+      await apiFetch('/api/campaign/pause', { method: 'POST' });
       fetchCampaignStatus();
     } catch (err) {
       setAlertMessage(err.message);
@@ -235,7 +323,7 @@ export default function App() {
 
   const handleResumeCampaign = async () => {
     try {
-      await fetch('/api/campaign/resume', { method: 'POST' });
+      await apiFetch('/api/campaign/resume', { method: 'POST' });
       fetchCampaignStatus();
     } catch (err) {
       setAlertMessage(err.message);
@@ -244,7 +332,7 @@ export default function App() {
 
   const handleStopCampaign = async () => {
     try {
-      await fetch('/api/campaign/stop', { method: 'POST' });
+      await apiFetch('/api/campaign/stop', { method: 'POST' });
       fetchCampaignStatus();
     } catch (err) {
       setAlertMessage(err.message);
@@ -254,7 +342,7 @@ export default function App() {
   const handleResetQueue = async () => {
     if (!window.confirm('Clear active queue and reset counters to start a fresh batch?')) return;
     try {
-      const res = await fetch('/api/campaign/reset', { method: 'POST' });
+      const res = await apiFetch('/api/campaign/reset', { method: 'POST' });
       const data = await res.json();
       if (data.ok) {
         await fetchCampaignStatus();
@@ -267,7 +355,7 @@ export default function App() {
 
   const handleRetryFailed = async () => {
     try {
-      await fetch('/api/campaign/reset', { method: 'POST' });
+      await apiFetch('/api/campaign/reset', { method: 'POST' });
       fetchCampaignStatus();
     } catch (err) {
       setAlertMessage(err.message);
@@ -275,7 +363,7 @@ export default function App() {
   };
 
   const handleTriggerManualDial = async (phone, contactName = '') => {
-    if (!phone || isDialingRef.current || isDialingManual || (campaignData.active_calls && campaignData.active_calls.length > 0)) {
+    if (!phone || isDialingRef.current || isDialingManual) {
       return;
     }
     isDialingRef.current = true;
@@ -287,7 +375,7 @@ export default function App() {
     setActiveNav('live');
 
     try {
-      const res = await fetch('/api/dial', {
+      const res = await apiFetch('/api/dial', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -328,10 +416,16 @@ export default function App() {
 
   const handleQueueLeads = async (payload) => {
     try {
-      const res = await fetch('/api/campaign/leads', {
+      const enrichedPayload = {
+        ...payload,
+        created_by_name: currentUser?.name || 'Super Admin',
+        created_by_email: currentUser?.email,
+        created_by_id: currentUser?.id,
+      };
+      const res = await apiFetch('/api/campaign/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(enrichedPayload),
       });
       const data = await res.json();
       if (data.ok) {
@@ -347,7 +441,33 @@ export default function App() {
     }
   };
 
+  // If not authenticated or verifying a token from email (account activation or password reset)
+  if (!currentUser || !authToken || urlToken) {
+    const handleAuthDone = (user, token) => {
+      setAuthToken(token);
+      setStoredUser(user);
+      setAuthTokenState(token);
+      setCurrentUser(user);
+      if (window.history.replaceState) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+      setUrlToken('');
+    };
+
+    return (
+      <AuthPages
+        mode={urlToken ? (urlMode === 'reset' ? 'reset' : 'activate') : 'login'}
+        initialMode={urlToken ? (urlMode === 'reset' ? 'reset' : 'activate') : 'login'}
+        token={urlToken}
+        onAuthSuccess={handleAuthDone}
+        onLoginSuccess={handleAuthDone}
+      />
+    );
+  }
+
   const activeCall = campaignData.active_calls?.[0] || null;
+  const activeCount = campaignData.channels_active || (campaignData.active_calls || []).length;
+  const maxConcurrency = campaignData.max_concurrency || 20;
 
   return (
     <TooltipProvider>
@@ -365,31 +485,43 @@ export default function App() {
             ).length
           }
           completedCount={completedCalls.length}
+          currentUser={currentUser}
+          onLogout={handleLogout}
         />
 
         <SidebarInset className="flex flex-col h-screen overflow-hidden bg-background">
-          {/* Official shadcn Header with SidebarTrigger */}
+          {/* Header with SidebarTrigger, Concurrency Pill, and User Controls */}
           <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b px-4 bg-background z-20">
             <div className="flex items-center gap-2">
               <SidebarTrigger className="-ml-1" />
               <Separator orientation="vertical" className="mr-2 h-4" />
               <div className="text-sm font-semibold tracking-tight text-foreground">
-                {activeNav === 'live' && 'Live Monitor & Dialer'}
+                {activeNav === 'live' && 'Live Monitor & Parallel Dialer'}
                 {activeNav === 'pending' && 'CRM Missed Calls (Pending Queue)'}
                 {activeNav === 'batches' && 'Campaign Batches'}
                 {activeNav === 'templates' && 'Campaign Scripts & Prompts'}
                 {activeNav === 'completed' && 'Completed Logs & Audio'}
+                {activeNav === 'users' && 'Team & Employee Management'}
               </div>
+
+              {/* Parallel Capacity Pill */}
+              <Badge
+                variant="outline"
+                className="hidden sm:inline-flex items-center gap-1 text-[10px] font-mono font-medium ml-2 border-[#008792]/30 text-[#008792] bg-[#008792]/5"
+              >
+                <Radio className="size-2.5 animate-pulse text-[#008792]" />
+                Trunk: {activeCount}/{maxConcurrency} Concurrent
+              </Badge>
             </div>
 
             <div className="flex items-center gap-2">
-              <div className="relative w-60 sm:w-72">
+              <div className="relative w-48 sm:w-64">
                 <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <Input
                   type="text"
                   value={headerSearch}
                   onChange={(e) => setHeaderSearch(e.target.value)}
-                  placeholder="Filter calls by phone, name, source..."
+                  placeholder="Filter calls by phone, name..."
                   className="h-8 pl-8 pr-7 text-xs bg-muted/40 border-input focus:bg-background"
                 />
                 {headerSearch && (
@@ -402,6 +534,30 @@ export default function App() {
                   </button>
                 )}
               </div>
+
+              {/* User Profile Pill in Header */}
+              {currentUser && (
+                <div className="flex items-center gap-1.5 pl-1 border-l border-border/80">
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted/50 border border-border text-xs">
+                    <div className="size-5 rounded-full bg-[#008792]/20 text-[#008792] flex items-center justify-center font-bold text-[10px]">
+                      {currentUser.name ? currentUser.name[0].toUpperCase() : 'U'}
+                    </div>
+                    <span className="font-medium truncate max-w-[90px] text-xs text-foreground">
+                      {currentUser.name || currentUser.email}
+                    </span>
+                    <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 uppercase font-semibold">
+                      {currentUser.role}
+                    </Badge>
+                  </div>
+                  <button
+                    onClick={handleLogout}
+                    title="Sign Out"
+                    className="p-1.5 rounded-md text-muted-foreground hover:text-rose-500 hover:bg-rose-500/10 transition-colors"
+                  >
+                    <LogOut className="size-4" />
+                  </button>
+                </div>
+              )}
             </div>
           </header>
 
@@ -507,6 +663,15 @@ export default function App() {
                     onQueueLeads={handleQueueLeads}
                     searchText={headerSearch}
                   />
+                </ErrorBoundary>
+              </div>
+            )}
+
+            {/* View 6: Team & Employee Management (Admin Only) */}
+            {activeNav === 'users' && currentUser?.role === 'admin' && (
+              <div className="p-4 flex-1 min-h-0 flex flex-col overflow-y-auto">
+                <ErrorBoundary>
+                  <UsersTab currentAdmin={currentUser} />
                 </ErrorBoundary>
               </div>
             )}
