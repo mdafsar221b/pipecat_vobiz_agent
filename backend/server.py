@@ -208,21 +208,15 @@ async def answer_call(request: Request):
 
     public_url = get_public_url()
     status_callback = xml_escape(f"{public_url}/stream-status")
-    rec_callback = xml_escape(f"{public_url}/recording-callback?batch_id={batch_id or ''}&to={to_number}")
     ws_stream_url = get_ws_url(f"/ws?call_uuid={call_uuid}&to={to_number}&batch_id={batch_id or ''}&template_id={template_id or ''}")
+
+    # Start live call recording asynchronously via Vobiz REST API
+    if call_uuid:
+        asyncio.create_task(vobiz_api.start_recording(call_uuid))
 
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Record recordSession="true" playBeep="false" maxLength="3600" redirect="false" callbackUrl="{rec_callback}" callbackMethod="POST"/>
-    <Stream bidirectional="true"
-            audioTrack="inbound"
-            keepCallAlive="true"
-            contentType="{xml_escape(STREAM_CONTENT_TYPE)}"
-            statusCallbackUrl="{status_callback}"
-            statusCallbackMethod="POST">
-        {ws_stream_url}
-    </Stream>
-    <Hangup/>
+    <Stream bidirectional="true" keepCallAlive="true" contentType="{xml_escape(STREAM_CONTENT_TYPE)}" statusCallbackUrl="{status_callback}" statusCallbackMethod="POST">{ws_stream_url.strip()}</Stream>
 </Response>"""
     return Response(content=xml_content, media_type="application/xml")
 

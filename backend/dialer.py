@@ -521,9 +521,24 @@ class OutboundDialer:
         creator_name = pending_item.get("created_by_name")
         creator_email = pending_item.get("created_by_email")
 
+        # Immediately claim active call slot synchronously so sequential guard sees it
+        temp_uuid = pending_item.get("id") or str(time.time())
+        pending_item["call_uuid"] = temp_uuid
+        self.set_active_call(
+            call_uuid=temp_uuid,
+            phone_number=target_phone,
+            customer_name=lead_name,
+            status="dialing",
+            batch_id=batch_id,
+            template_id=tpl_id,
+            created_by_id=creator_id,
+            created_by_name=creator_name,
+            created_by_email=creator_email,
+        )
+
         logger.info(
             f"🚀 [Sequential Slot] Dialer placing call to {target_phone} by {creator_name or 'System'} "
-            f"(batch: {batch_id}, active calls: {len(self.active_calls) + 1})"
+            f"(batch: {batch_id}, active calls: {len(self.active_calls)})"
         )
 
         call_answer_url = f"{public_url}/answer?batch_id={batch_id or ''}&lead_id={lead_id}&to={target_phone}&template_id={tpl_id}"
@@ -535,19 +550,21 @@ class OutboundDialer:
                 answer_url=call_answer_url,
                 hangup_url=call_hangup_url,
             )
-            call_uuid = res.get("request_uuid") or res.get("call_uuid") or pending_item["id"]
+            call_uuid = res.get("request_uuid") or res.get("call_uuid") or temp_uuid
             pending_item["call_uuid"] = call_uuid
-            self.set_active_call(
-                call_uuid=call_uuid,
-                phone_number=target_phone,
-                customer_name=lead_name,
-                status="dialing",
-                batch_id=batch_id,
-                template_id=tpl_id,
-                created_by_id=creator_id,
-                created_by_name=creator_name,
-                created_by_email=creator_email,
-            )
+            if call_uuid != temp_uuid:
+                self.active_calls.pop(temp_uuid, None)
+                self.set_active_call(
+                    call_uuid=call_uuid,
+                    phone_number=target_phone,
+                    customer_name=lead_name,
+                    status="dialing",
+                    batch_id=batch_id,
+                    template_id=tpl_id,
+                    created_by_id=creator_id,
+                    created_by_name=creator_name,
+                    created_by_email=creator_email,
+                )
             tracer = diagnostics.get_tracer(call_uuid, phone_number=target_phone, batch_id=batch_id)
             tracer.record_event("call_initiated", {
                 "to": target_phone,
@@ -565,13 +582,14 @@ class OutboundDialer:
                 call_uuid=call_uuid,
                 phone_number=target_phone,
                 batch_id=batch_id,
-                metadata={"customer_name": lead_name, "lead_id": lead_id, "status": "dialing"},
+                metadata={"customer_name": lead_name, "lead_id": lead_id, "status": "dialing", "request_uuid": call_uuid},
                 created_by_id=creator_id,
                 created_by_name=creator_name,
             )
         except Exception as exc:
             logger.error(f"Dialer failed to place call to {target_phone}: {exc}")
             pending_item["status"] = "failed"
+            self.active_calls.pop(temp_uuid, None)
             tracer = diagnostics.get_tracer(pending_item.get("id", str(time.time())), phone_number=target_phone, batch_id=batch_id)
             tracer.record_error("api_call_failed", str(exc))
 
@@ -605,10 +623,13 @@ class OutboundDialer:
                     if not is_user_running:
                         continue
 
-                    # Sequential Guard: Does this user already have an active call in progress?
+                    # Sequential Guard: Does this user already have an active or in-flight call?
                     user_has_active_call = any(
                         self._matches_user(c, c_id, c_name, c_email)
                         for c in self.active_calls.values()
+                    ) or any(
+                        i.get("status") == "dialing" and self._matches_user(i, c_id, c_name, c_email)
+                        for i in self.queue
                     )
                     if user_has_active_call:
                         # User is already on a call! Wait for it to finish before starting next lead.
@@ -618,8 +639,9 @@ class OutboundDialer:
                     break
 
             if not pending_item:
-                # If leads are done or users are waiting for active calls to finish, wait
-                if self.active_calls:
+                # If leads are done or calls are in flight/live, keep waiting patiently!
+                has_in_flight = any(i.get("status") == "dialing" for i in self.queue) or len(self.active_calls) > 0
+                if has_in_flight:
                     await asyncio.sleep(0.8)
                     continue
 
@@ -627,7 +649,7 @@ class OutboundDialer:
                 for uid in list(self.user_statuses.keys()):
                     if self.user_statuses.get(uid) == "running":
                         u_has_pending = any(
-                            i.get("status") == "pending" and self._matches_user(i, uid, uid, uid)
+                            i.get("status") in ("pending", "dialing") and self._matches_user(i, uid, uid, uid)
                             for i in self.queue
                         )
                         u_has_active = any(

@@ -74,3 +74,18 @@ async def hangup_call(call_uuid: str) -> bool:
         except Exception as exc:
             logger.warning(f"Failed to execute Vobiz hangup for {call_uuid}: {exc}")
             return False
+
+# Start background call recording via Vobiz REST API
+async def start_recording(call_uuid: str) -> Optional[Dict[str, Any]]:
+    if not call_uuid:
+        return None
+    url = f"{API_BASE}/Account/{AUTH_ID}/Call/{call_uuid}/Record/"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            resp = await client.post(url, json={"time_limit": 3600, "file_format": "mp3"}, headers=get_headers())
+            if resp.status_code in (200, 201, 202):
+                logger.info(f"Started Vobiz live call recording for {call_uuid}")
+                return resp.json() if resp.text else {}
+        except Exception as exc:
+            logger.debug(f"Vobiz live recording notice for {call_uuid}: {exc}")
+    return None
