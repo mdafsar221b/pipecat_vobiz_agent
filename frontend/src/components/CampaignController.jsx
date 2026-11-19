@@ -19,7 +19,6 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { apiFetch } from '../utils/auth';
 
 const PREDEFINED_TEST_CONTACTS = [
   { name: 'Afsar', phone: '+917007173798' },
@@ -108,7 +107,7 @@ export default function CampaignController({
     setTestBatchFeedback(`Queueing ${leads.length} contacts...`);
 
     try {
-      const res = await apiFetch('/api/campaign/leads', {
+      const res = await fetch('/api/campaign/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -126,7 +125,7 @@ export default function CampaignController({
 
       if (startImmediately) {
         setTestBatchFeedback(`Starting OBD dialer for ${leads.length} calls...`);
-        await apiFetch('/api/campaign/start', { method: 'POST' });
+        await fetch('/api/campaign/start', { method: 'POST' });
       }
 
       setTestBatchFeedback(

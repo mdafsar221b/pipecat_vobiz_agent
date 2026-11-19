@@ -177,7 +177,6 @@ export default function LiveConsoleView({
       <div className="flex-1 min-h-0 flex flex-col bg-card overflow-hidden">
         <LiveCallHud
           activeCall={activeCall}
-          activeCalls={activeCalls}
           lastCompletedCall={lastCompletedCall}
           completedCalls={completedCalls}
           onRefreshLogs={onRefreshLogs}

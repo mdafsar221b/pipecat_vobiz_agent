@@ -13,8 +13,6 @@ import {
   Pause,
   Pencil,
   X,
-  ChevronDown,
-  ChevronUp,
 } from 'lucide-react';
 import {
   Table,
@@ -45,7 +43,6 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { cn } from '@/lib/utils';
-import { apiFetch } from '../utils/auth';
 import {
   formatBytes,
   formatDuration,
@@ -69,19 +66,6 @@ export default function CallsTable({
 }) {
   const [inspectingCall, setInspectingCall] = useState(null);
   const [activeDrawerTab, setActiveDrawerTab] = useState('transcript');
-  const [expandedTranscripts, setExpandedTranscripts] = useState(new Set());
-
-  const toggleInlineTranscript = (uuid) => {
-    setExpandedTranscripts((prev) => {
-      const next = new Set(prev);
-      if (next.has(uuid)) {
-        next.delete(uuid);
-      } else {
-        next.add(uuid);
-      }
-      return next;
-    });
-  };
 
   // Inline audio player state
   const [playingUuid, setPlayingUuid] = useState(null);
@@ -127,7 +111,7 @@ export default function CallsTable({
         customer_name: editForm.customer_name,
       };
 
-      const res = await apiFetch(`/api/call/${encodeURIComponent(targetUuid)}`, {
+      const res = await fetch(`/api/call/${encodeURIComponent(targetUuid)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -184,7 +168,7 @@ export default function CallsTable({
     calls.length > 0 &&
     calls.every((c) => selectedUuids.has(c.call_uuid || c.lead_id));
 
-  const colSpanCount = showSelection ? 7 : 6;
+  const colSpanCount = showSelection ? 6 : 5;
 
   return (
     <>
@@ -221,8 +205,7 @@ export default function CallsTable({
               <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Disposition</TableHead>
               <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Duration</TableHead>
               <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Time &amp; Callback</TableHead>
-              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs w-56">Audio Recording</TableHead>
-              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs text-right pr-3 w-36">Transcript &amp; Actions</TableHead>
+              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs text-right pr-3">Recording</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -290,270 +273,141 @@ export default function CallsTable({
 
                 const isChecked = selectedUuids ? selectedUuids.has(callUuid) : false;
                 const isSelected = inspectingCall?.call_uuid === callUuid;
-                const turns = entry.transcripts || entry.turns || [];
-                const turnsCount = turns.length;
-                const isTranscriptOpen = expandedTranscripts.has(callUuid);
 
                 return (
-                  <React.Fragment key={callUuid}>
-                    <TableRow
-                      onClick={() => setInspectingCall(callWithOverrides)}
-                      className={cn(
-                        "cursor-pointer transition-colors hover:bg-muted/40",
-                        isChecked && "bg-[#008792]/5",
-                        isSelected && "bg-muted/60"
-                      )}
-                    >
-                      {showSelection && (
-                        <TableCell className="w-8 px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => onToggleSelect && onToggleSelect(callUuid)}
-                            className="w-3.5 h-3.5 rounded border-input text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
-                          />
-                        </TableCell>
-                      )}
-
-                      {/* Recipient */}
-                      <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
-                        <div className="flex items-center gap-1.5 font-mono text-xs">
-                          <span className="font-semibold text-foreground">
-                            {displayPhone}
-                          </span>
-                          {custName && (
-                            <span className="font-sans text-[10px] font-medium text-[#008792] bg-[#008792]/10 px-1 py-0.2 rounded">
-                              {custName}
-                            </span>
-                          )}
-                          <span className="text-[10px] text-muted-foreground font-normal">
-                            #{shortUuid}
-                          </span>
-                        </div>
+                  <TableRow
+                    key={callUuid}
+                    onClick={() => setInspectingCall(callWithOverrides)}
+                    className={cn(
+                      "cursor-pointer transition-colors hover:bg-muted/40",
+                      isChecked && "bg-[#008792]/5",
+                      isSelected && "bg-muted/60"
+                    )}
+                  >
+                    {showSelection && (
+                      <TableCell className="w-8 px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => onToggleSelect && onToggleSelect(callUuid)}
+                          className="w-3.5 h-3.5 rounded border-input text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
+                        />
                       </TableCell>
+                    )}
 
-                      {/* Disposition */}
-                      <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
-                        <span className={cn(
-                          "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium border",
-                          dispConf.bg, dispConf.text, dispConf.border
-                        )}>
-                          <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", dispConf.dot)} />
-                          {dispConf.label}
+                    {/* Recipient */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5 font-mono text-xs">
+                        <span className="font-semibold text-foreground">
+                          {displayPhone}
                         </span>
-                      </TableCell>
-
-                      {/* Duration */}
-                      <TableCell className="px-2.5 py-1.5 whitespace-nowrap font-mono text-xs text-muted-foreground">
-                        <span className="inline-flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-muted-foreground/60" />
-                          <span className="text-foreground">{formatDuration(durationSec)}</span>
-                          {hasRecording && (
-                            <Volume2 className="w-3 h-3 text-[#008792]" title="Audio recording available" />
-                          )}
-                        </span>
-                      </TableCell>
-
-                      {/* Time & Callback */}
-                      <TableCell className="px-2.5 py-1.5 whitespace-nowrap font-mono text-xs">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-muted-foreground">
-                            {formatTime(entry.started || entry.created_at)}
+                        {custName && (
+                          <span className="font-sans text-[10px] font-medium text-[#008792] bg-[#008792]/10 px-1 py-0.2 rounded">
+                            {custName}
                           </span>
-                          {cbTime && (
-                            <span className="font-sans font-medium text-emerald-700 bg-emerald-50 px-1 py-0.2 border border-emerald-200 text-[10px] rounded">
-                              CB: {cbTime}
-                            </span>
-                          )}
-                        </div>
-                      </TableCell>
+                        )}
+                        <span className="text-[10px] text-muted-foreground font-normal">
+                          #{shortUuid}
+                        </span>
+                      </div>
+                    </TableCell>
 
-                      {/* Audio Recording Column */}
-                      <TableCell className="px-2.5 py-1 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                    {/* Disposition */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
+                      <span className={cn(
+                        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium border",
+                        dispConf.bg, dispConf.text, dispConf.border
+                      )}>
+                        <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", dispConf.dot)} />
+                        {dispConf.label}
+                      </span>
+                    </TableCell>
+
+                    {/* Duration */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap font-mono text-xs text-muted-foreground">
+                      <span className="inline-flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-muted-foreground/60" />
+                        <span className="text-foreground">{formatDuration(durationSec)}</span>
+                        {hasRecording && (
+                          <Volume2 className="w-3 h-3 text-[#008792]" title="Audio recording available in drawer" />
+                        )}
+                      </span>
+                    </TableCell>
+
+                    {/* Time & Callback */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap font-mono text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-muted-foreground">
+                          {formatTime(entry.started || entry.created_at)}
+                        </span>
+                        {cbTime && (
+                          <span className="font-sans font-medium text-emerald-700 bg-emerald-50 px-1 py-0.2 border border-emerald-200 text-[10px] rounded">
+                            CB: {cbTime}
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+
+                    {/* Recording Player & Actions Upfront */}
+                    <TableCell className="px-2.5 py-1 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-end gap-1">
                         {hasRecording ? (
-                          <div className="flex items-center gap-1.5">
-                            <audio
-                              controls
-                              preload="none"
-                              className="h-7 w-48 rounded outline-none"
-                              src={`/api/recording/${encodeURIComponent(callUuid)}`}
-                            />
+                          <>
+                            <Button
+                              size="xs"
+                              variant={playingUuid === callUuid && isPlaying ? "default" : "outline"}
+                              onClick={(e) => handleTogglePlay(e, callUuid)}
+                              className={cn(
+                                "h-6 px-2 gap-1 text-[11px] font-medium transition-all cursor-pointer",
+                                playingUuid === callUuid && isPlaying
+                                  ? "bg-[#008792] hover:bg-[#007680] text-white border-transparent"
+                                  : "hover:border-[#008792] hover:text-[#008792]"
+                              )}
+                              title={playingUuid === callUuid && isPlaying ? "Pause Audio" : "Play Recording"}
+                            >
+                              {playingUuid === callUuid && isPlaying ? (
+                                <>
+                                  <Pause className="w-3 h-3 fill-current" />
+                                  <span className="font-mono text-[10px]">
+                                    {Math.floor(audioProgress)}s
+                                  </span>
+                                </>
+                              ) : (
+                                <>
+                                  <Play className="w-3 h-3 fill-current" />
+                                  <span>Play</span>
+                                </>
+                              )}
+                            </Button>
+
                             <a
                               href={`/api/recording/${encodeURIComponent(callUuid)}`}
                               download={`${callUuid}.wav`}
                               target="_blank"
                               rel="noreferrer"
-                              className="inline-flex items-center justify-center h-7 w-7 rounded border border-input bg-background hover:bg-muted text-muted-foreground hover:text-[#008792] transition-colors shrink-0"
+                              className="inline-flex items-center justify-center h-6 w-6 rounded border border-input bg-background hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
                               title="Download Audio WAV"
                             >
-                              <Download className="w-3.5 h-3.5" />
+                              <Download className="w-3 h-3" />
                             </a>
-                          </div>
+                          </>
                         ) : (
-                          <span className="text-xs text-muted-foreground/30 font-mono select-none pl-3">--</span>
+                          <span className="text-[11px] text-muted-foreground/40 italic pr-1">--</span>
                         )}
-                      </TableCell>
 
-                      {/* Transcript & Actions Column */}
-                      <TableCell className="px-2.5 py-1 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-end gap-1.5">
-                          {turnsCount > 0 ? (
-                            <Button
-                              size="xs"
-                              variant="outline"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleInlineTranscript(callUuid);
-                              }}
-                              className={cn(
-                                "h-7 px-2.5 text-xs font-semibold gap-1.5 transition-all cursor-pointer shadow-none",
-                                isTranscriptOpen
-                                  ? "bg-[#008792] text-white border-[#008792] hover:bg-[#00747d]"
-                                  : "bg-white text-[#008792] border-teal-300/80 hover:border-[#008792] hover:bg-teal-50/70"
-                              )}
-                              title="View dialog transcript and conversation duration inline"
-                            >
-                              <span>Transcript ({turnsCount})</span>
-                              {isTranscriptOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                            </Button>
-                          ) : (
-                            <span className="text-xs text-muted-foreground/30 font-mono select-none px-2">--</span>
-                          )}
-
-                          {/* Quick Edit Disposition & Callback */}
-                          <Button
-                            size="xs"
-                            variant="ghost"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openEditModal(callWithOverrides);
-                            }}
-                            className="h-7 w-7 p-0 text-muted-foreground hover:text-[#008792] hover:bg-[#008792]/10 cursor-pointer shrink-0"
-                            title="Edit Disposition & Callback"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-
-                    {/* Adjacent Inline Expandable Transcript Row */}
-                    {isTranscriptOpen && (
-                      <TableRow className="bg-slate-50/80 hover:bg-slate-50/80 border-b border-border/70">
-                        <TableCell colSpan={colSpanCount} className="p-3 sm:p-4" onClick={(e) => e.stopPropagation()}>
-                          <div className="bg-white rounded-lg border border-teal-500/25 shadow-xs overflow-hidden">
-                            {/* Header: Conversation Summary & How Long It Went */}
-                            <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 bg-gradient-to-r from-teal-50/80 via-slate-50 to-white border-b border-border text-xs">
-                              <div className="flex items-center gap-2">
-                                <div className="w-6 h-6 rounded-md bg-[#008792]/10 flex items-center justify-center shrink-0">
-                                  <Bot className="w-3.5 h-3.5 text-[#008792]" />
-                                </div>
-                                <div>
-                                  <span className="font-bold text-slate-800 text-xs">
-                                    Conversation Dialog Transcript
-                                  </span>
-                                  <span className="text-[11px] text-muted-foreground ml-1.5 font-normal">
-                                    ({turnsCount} spoken turns)
-                                  </span>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                {/* Conversation duration badge - clearly showing how long it went */}
-                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono font-semibold bg-[#008792]/10 text-[#008792] border border-[#008792]/20">
-                                  <Clock className="w-3.5 h-3.5 text-[#008792]" />
-                                  <span>Duration: <strong>{formatDuration(durationSec)}</strong></span>
-                                </span>
-
-                                {/* Recipient phone badge */}
-                                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-mono text-muted-foreground bg-muted/60 border border-border">
-                                  <Phone className="w-3 h-3" />
-                                  <span>{displayPhone}</span>
-                                </span>
-
-                                {/* Disposition badge */}
-                                <span className={cn(
-                                  "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium border",
-                                  dispConf.bg, dispConf.text, dispConf.border
-                                )}>
-                                  <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", dispConf.dot)} />
-                                  {dispConf.label}
-                                </span>
-
-                                {/* Close inline view button */}
-                                <Button
-                                  size="xs"
-                                  variant="ghost"
-                                  onClick={() => toggleInlineTranscript(callUuid)}
-                                  className="h-6 w-6 p-0 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded cursor-pointer"
-                                  title="Close transcript"
-                                >
-                                  <X className="w-3.5 h-3.5" />
-                                </Button>
-                              </div>
-                            </div>
-
-                            {/* Dialog Turns List */}
-                            <div className="p-3.5 max-h-80 overflow-y-auto space-y-2.5 bg-slate-50/40">
-                              {turnsCount > 0 ? (
-                                turns.map((t, tIdx) => {
-                                  const isAgent = t.role === 'agent' || t.speaker === 'agent';
-                                  return (
-                                    <div
-                                      key={tIdx}
-                                      className={cn(
-                                        "flex flex-col gap-1",
-                                        isAgent ? "items-start" : "items-end"
-                                      )}
-                                    >
-                                      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-semibold uppercase px-1">
-                                        {isAgent ? (
-                                          <>
-                                            <Bot className="w-3.5 h-3.5 text-[#008792]" />
-                                            <span className="text-[#008792]">Ananya (Voice AI)</span>
-                                          </>
-                                        ) : (
-                                          <>
-                                            <User className="w-3.5 h-3.5 text-emerald-600" />
-                                            <span className="text-emerald-700">{custName || 'Customer'}</span>
-                                          </>
-                                        )}
-                                        {t.timestamp && (
-                                          <span className="font-mono text-[9px] text-slate-400 font-normal">
-                                            {String(t.timestamp).slice(11, 19)}
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div
-                                        className={cn(
-                                          "max-w-[85%] px-3.5 py-2 text-xs leading-relaxed rounded-xl shadow-2xs",
-                                          isAgent
-                                            ? "bg-white text-slate-900 border border-teal-200/60 rounded-tl-xs"
-                                            : "bg-emerald-50 text-emerald-950 border border-emerald-200 rounded-tr-xs"
-                                        )}
-                                      >
-                                        {t.text}
-                                      </div>
-                                    </div>
-                                  );
-                                })
-                              ) : (
-                                <div className="py-6 text-center text-xs text-muted-foreground">
-                                  <Phone className="w-5 h-5 mx-auto mb-1.5 text-muted-foreground/40" />
-                                  <p className="font-medium text-foreground">No spoken dialog turns recorded for this call.</p>
-                                  <p className="text-[11px] text-muted-foreground mt-0.5">
-                                    {durationSec > 0
-                                      ? `Call connected for ${formatDuration(durationSec)} but no spoken dialog turns were logged.`
-                                      : "Call was unanswered or disconnected before speech."}
-                                  </p>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </React.Fragment>
+                        {/* Quick Edit Disposition & Callback */}
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          onClick={() => openEditModal(callWithOverrides)}
+                          className="h-6 w-6 p-0 text-muted-foreground hover:text-[#008792] hover:bg-[#008792]/10 cursor-pointer"
+                          title="Edit Disposition & Callback"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
                 );
               })
             )}

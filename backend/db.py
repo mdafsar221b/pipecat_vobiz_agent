@@ -303,8 +303,6 @@ def record_call_start(
     phone_number: str = "",
     batch_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
-    created_by_id: Optional[str] = None,
-    created_by_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     col = get_collection()
     initial_doc = {
@@ -314,12 +312,10 @@ def record_call_start(
         "created_at": now_iso(),
         "start_time": time.time(),
         "disposition": "not_talking",
-        "customer_name": (metadata.get("customer_name") if metadata else None),
+        "customer_name": None,
         "callback_time": None,
         "reason": None,
         "transcripts": [],
-        "created_by_id": created_by_id or (metadata.get("created_by_id") if metadata else None),
-        "created_by_name": created_by_name or (metadata.get("created_by_name") if metadata else None),
         "metadata": metadata or {},
     }
     if col is not None:
@@ -744,20 +740,13 @@ def get_batch_metrics(batch_id: str) -> Dict[str, int]:
             logger.error(f"Failed to calculate metrics for batch {batch_id}: {exc}")
     return metrics
 
-# Retrieve all campaign batches with live metrics, optionally filtered by user
-def get_batches(user_id: Optional[str] = None, is_admin: bool = True) -> List[Dict[str, Any]]:
+# Retrieve all campaign batches with live metrics
+def get_batches() -> List[Dict[str, Any]]:
     col = get_batches_collection()
     batches: List[Dict[str, Any]] = []
     if col is not None:
         try:
-            query: Dict[str, Any] = {}
-            if not is_admin and user_id:
-                query["$or"] = [
-                    {"created_by_id": user_id},
-                    {"created_by": user_id},
-                    {"created_by_email": user_id},
-                ]
-            cursor = col.find(query, {"_id": 0}).sort("created_at", DESCENDING)
+            cursor = col.find({}, {"_id": 0}).sort("created_at", DESCENDING)
             for b in cursor:
                 bid = b.get("batch_id", "")
                 m = get_batch_metrics(bid)
