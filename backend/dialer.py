@@ -262,40 +262,61 @@ class OutboundDialer:
     def _check_watchdog(self):
         if not self.active_calls:
             return
+        import re
         now = time.time()
         for uuid, call in list(self.active_calls.items()):
+            phone_raw = call.get("phone_number") or ""
+            target_digits = re.sub(r"\D", "", str(phone_raw))[-10:] if phone_raw else None
+
             # 1. Immediate sync: if MongoDB already marked call as finished, pop it immediately!
             doc = db.get_call(uuid) if uuid else None
-            if not doc and call.get("phone_number"):
+            if not doc and target_digits:
                 col = db.get_collection()
                 if col is not None:
                     try:
-                        doc = col.find_one({"phone_number": call["phone_number"]}, {"_id": 0}, sort=[("created_at", -1)])
+                        doc = col.find_one(
+                            {"phone_number": {"$regex": f"{target_digits}$"}},
+                            {"_id": 0},
+                            sort=[("created_at", -1)],
+                        )
                     except Exception:
                         pass
 
             if doc and (doc.get("ended_at") or doc.get("status") in ("hung_up", "completed", "failed") or doc.get("disposition")):
-                logger.info(f"Watchdog auto-clearing DB-finished call {uuid[:8]} (status: {doc.get('status')}, disposition: {doc.get('disposition')})")
-                self.on_call_ended(uuid, phone_number=call.get("phone_number"))
+                logger.info(f"Watchdog auto-clearing DB-finished call {uuid[:8]} (phone: {phone_raw}, disposition: {doc.get('disposition')})")
+                self.on_call_ended(uuid, phone_number=phone_raw)
                 continue
 
             elapsed = now - call.get("started_at", now)
             status = call.get("status", "dialing")
             turns_count = len(doc.get("turns", [])) if doc else 0
-            if (status == "dialing" and elapsed > 45.0) or (status == "in_call" and elapsed > 120.0 and turns_count == 0) or elapsed > 360.0:
-                logger.warning(f"Watchdog terminating stuck call {uuid} ({status}) after {elapsed:.1f}s")
+
+            # 2. Strict Timeout Checks:
+            # - Ringing timeout: 35s max if not picked up
+            # - Stream failed / handset dropped immediately: If in_call but after 12s no turns exist, clear immediately!
+            # - Hard safety limit: 600s (10 min)
+            is_stuck_dialing = (status == "dialing" and elapsed > 35.0)
+            is_stuck_incall = (status == "in_call" and elapsed > 12.0 and turns_count == 0)
+            is_overdue = (elapsed > 600.0)
+
+            if is_stuck_dialing or is_stuck_incall or is_overdue:
+                disp = "no_answer" if is_stuck_dialing else ("not_talking" if is_stuck_incall else "completed")
+                reason = "Ringing timeout (35s)" if is_stuck_dialing else (
+                    "Carrier media stream failure - no speech or WebSocket handshake within 12s" if is_stuck_incall else "Max call duration exceeded"
+                )
+                logger.warning(f"Watchdog terminating stuck call {uuid[:8]} ({status}) after {elapsed:.1f}s ({reason})")
                 try:
                     db.finalize_call(
                         call_uuid=uuid,
                         status="hung_up",
-                        fallback_disposition="no_answer" if status == "dialing" else "dropped",
-                        disposition="no_answer" if status == "dialing" else "dropped",
-                        reason="Watchdog timeout - carrier response or hangup webhook expired",
+                        fallback_disposition=disp,
+                        disposition=disp,
+                        reason=reason,
                     )
                 except Exception as exc:
                     logger.error(f"Error finalizing stuck call {uuid} in watchdog: {exc}")
                 finally:
-                    self.on_call_ended(uuid, phone_number=call.get("phone_number"))
+                    self.on_call_ended(uuid, phone_number=phone_raw)
 
     # Link incoming telephony call_uuid with active call slot
     def link_call_uuid(
@@ -596,6 +617,9 @@ class OutboundDialer:
     # Continuous background worker placing calls sequentially (strictly 1-by-1 per user)
     async def _dial_loop(self, public_url: str):
         while any(st == "running" for st in self.user_statuses.values()) or self.status == "running":
+            # 0. Continuously clear any finished or stuck calls across all user channels
+            self._check_watchdog()
+
             # 1. Global concurrency gate
             if len(self.active_calls) >= self.max_concurrency:
                 await asyncio.sleep(0.5)

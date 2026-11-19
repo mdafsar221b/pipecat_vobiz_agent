@@ -89,3 +89,25 @@ async def start_recording(call_uuid: str) -> Optional[Dict[str, Any]]:
         except Exception as exc:
             logger.debug(f"Vobiz live recording notice for {call_uuid}: {exc}")
     return None
+
+# Check whether a call is still live according to Vobiz carrier API
+async def check_is_call_live(call_uuid: str) -> bool:
+    if not call_uuid or call_uuid.startswith("temp_") or len(call_uuid) < 8:
+        return True
+    url = f"{API_BASE}/Account/{AUTH_ID}/Call/{call_uuid}/"
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            resp = await client.get(url, headers=get_headers())
+            if resp.status_code == 200:
+                data = resp.json()
+                call_state = str(data.get("call_status") or data.get("status") or "").lower()
+                # If carrier says completed, failed, hungup, or terminated, it is no longer live
+                if call_state in ("completed", "hangup", "hung_up", "failed", "rejected", "busy", "no-answer", "no_answer", "cancelled"):
+                    return False
+                return True
+            elif resp.status_code == 404:
+                return False
+        except Exception as exc:
+            logger.debug(f"Vobiz live call check failed for {call_uuid}: {exc}")
+    return True
+

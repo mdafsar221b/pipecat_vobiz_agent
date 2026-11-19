@@ -46,40 +46,45 @@ export default function LiveCallHud({
 
   // Multi-channel focus: resolve effective active call from active calls list (filtering out completed calls)
   const effectiveCall = useMemo(() => {
-      // Check recent completed calls to prevent ghost running timers
-      const completedUuids = new Set(
-        (completedCalls || []).map((c) => String(c.call_uuid || '').toLowerCase())
-      );
+    // Check recent completed calls (both by UUID and normalized 10-digit phone) to prevent ghost running timers
+    const completedUuids = new Set(
+      (completedCalls || []).map((c) => String(c.call_uuid || '').toLowerCase())
+    );
+    const completedPhones = new Set(
+      (completedCalls || [])
+        .map((c) => String(c.phone_number || '').replace(/\D/g, '').slice(-10))
+        .filter(Boolean)
+    );
 
-      const liveList = (activeCalls || []).filter((c) => {
-        if (!c || c.status === 'completed' || c.status === 'hung_up' || c.disposition) {
-          return false;
-        }
-          if (c.call_uuid && completedUuids.has(String(c.call_uuid).toLowerCase())) {
-            return false;
-          }
-      return true;
-    });
+    const isCallCompleted = (c) => {
+      if (!c) return true;
+      if (c.status === 'completed' || c.status === 'hung_up' || c.disposition) return true;
+      const u = String(c.call_uuid || '').toLowerCase();
+      if (u && completedUuids.has(u)) return true;
+      const digits = String(c.phone_number || '').replace(/\D/g, '').slice(-10);
+      if (digits && completedPhones.has(digits)) return true;
+      // If marked in_call but elapsed > 20s with 0 turns, carrier stream has dropped
+      if (c.status === 'in_call' && (c.elapsed_sec || 0) > 20 && (!c.turns || c.turns.length === 0)) {
+        return true;
+      }
+      return false;
+    };
 
-  if (liveList.length > 0) {
-    if (selectedCallUuid) {
-      const found = liveList.find((c) => c.call_uuid === selectedCallUuid);
-      if (found) return found;
+    const liveList = (activeCalls || []).filter((c) => !isCallCompleted(c));
+
+    if (liveList.length > 0) {
+      if (selectedCallUuid) {
+        const found = liveList.find((c) => c.call_uuid === selectedCallUuid);
+        if (found) return found;
+      }
+      return liveList[0];
     }
-    return liveList[0];
-  }
 
-  if (
-    activeCall &&
-    activeCall.status !== 'completed' &&
-    activeCall.status !== 'hung_up' &&
-    !activeCall.disposition &&
-    (!activeCall.call_uuid || !completedUuids.has(String(activeCall.call_uuid).toLowerCase()))
-  ) {
-    return activeCall;
-  }
-  return null;
-}, [activeCalls, selectedCallUuid, activeCall, completedCalls]);
+    if (activeCall && !isCallCompleted(activeCall)) {
+      return activeCall;
+    }
+    return null;
+  }, [activeCalls, selectedCallUuid, activeCall, completedCalls]);
 
 // Auto-scroll active call transcript container
 useEffect(() => {

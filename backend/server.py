@@ -210,27 +210,26 @@ async def answer_call(request: Request):
     status_callback = xml_escape(f"{public_url}/stream-status")
     ws_stream_url = get_ws_url(f"/ws?call_uuid={call_uuid}&to={to_number}&batch_id={batch_id or ''}&template_id={template_id or ''}")
 
-    # Start live call recording asynchronously via Vobiz REST API
-    if call_uuid:
-        asyncio.create_task(vobiz_api.start_recording(call_uuid))
-
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Stream bidirectional="true" keepCallAlive="true" contentType="{xml_escape(STREAM_CONTENT_TYPE)}" statusCallbackUrl="{status_callback}" statusCallbackMethod="POST">{ws_stream_url.strip()}</Stream>
 </Response>"""
-    return Response(content=xml_content, media_type="application/xml")
+    return Response(content=xml_content, media_type="text/xml; charset=utf-8")
 
 # Vobiz stream status webhook
-@app.post("/stream-status")
+@app.api_route("/stream-status", methods=["GET", "POST"])
 async def stream_status(request: Request):
     params = await parse_params(request)
     call_uuid = params.get("CallUUID") or params.get("call_uuid") or ""
-    status_name = params.get("Status") or params.get("status") or params.get("Event") or ""
+    status_name = str(params.get("Status") or params.get("status") or params.get("Event") or "").lower()
     stream_err = params.get("Error") or params.get("error") or ""
-    logger.info(f"Stream status update: {params}")
+    logger.info(f"Stream status callback for {call_uuid}: status={status_name}, error={stream_err}")
     if call_uuid:
         tracer = diagnostics.get_tracer(call_uuid)
         tracer.record_event("vobiz_stream_status", {"status": status_name, "error": stream_err})
+        # If stream stopped, disconnected, completed, or failed, auto-clear dialer active call immediately!
+        if status_name in ("stop", "stopped", "ended", "completed", "failed", "disconnected") or stream_err:
+            dialer.on_call_ended(call_uuid)
     return {"status": "ok"}
 
 # Vobiz recording completion callback
@@ -247,7 +246,7 @@ async def recording_callback(request: Request):
     return {"status": "ok"}
 
 # Vobiz hangup callback
-@app.post("/hangup")
+@app.api_route("/hangup", methods=["GET", "POST"])
 async def hangup_webhook(request: Request):
     params = await parse_params(request)
     call_uuid = params.get("CallUUID", "") or params.get("call_uuid", "")
@@ -256,22 +255,24 @@ async def hangup_webhook(request: Request):
     hangup_cause = params.get("HangupCause") or params.get("hangup_cause") or "NORMAL_CLEARING"
     hangup_source = params.get("HangupSource") or params.get("hangup_source") or ""
     duration = params.get("Duration") or params.get("duration")
-    logger.info(f"Vobiz Hangup callback for {call_uuid}: cause={hangup_cause}, source={hangup_source}, batch={batch_id}")
-    if call_uuid:
-        tracer = diagnostics.get_tracer(call_uuid, phone_number=to_number, batch_id=batch_id)
-        if not any(e.get("event") == "call_answered" for e in tracer.events):
-            carrier_details = {
-                "cause": hangup_cause,
-                "source": hangup_source,
-                "telephony_status": "Handset declined or line engaged before answer" if hangup_cause in ("USER_BUSY", "17") else (
-                    "Handset rang out without answering" if hangup_cause in ("NO_ANSWER", "19", "NO_USER_RESPONDING") else (
-                        "Call rejected by carrier or network" if hangup_cause in ("CALL_REJECTED", "21") else hangup_cause
-                    )
-                ),
-            }
-            tracer.record_event("carrier_signaling", carrier_details)
-        tracer.record_hangup(cause=hangup_cause, source=hangup_source, duration=duration)
-        db.finalize_call(call_uuid, status="hung_up", batch_id=batch_id)
+    logger.info(f"Vobiz Hangup callback for {call_uuid or to_number}: cause={hangup_cause}, source={hangup_source}, batch={batch_id}")
+    if call_uuid or to_number:
+        eff_uuid = call_uuid or (dialer.active_call.get("call_uuid") if dialer.active_call else "")
+        if eff_uuid:
+            tracer = diagnostics.get_tracer(eff_uuid, phone_number=to_number, batch_id=batch_id)
+            if not any(e.get("event") == "call_answered" for e in tracer.events):
+                carrier_details = {
+                    "cause": hangup_cause,
+                    "source": hangup_source,
+                    "telephony_status": "Handset declined or line engaged before answer" if hangup_cause in ("USER_BUSY", "17") else (
+                        "Handset rang out without answering" if hangup_cause in ("NO_ANSWER", "19", "NO_USER_RESPONDING") else (
+                            "Call rejected by carrier or network" if hangup_cause in ("CALL_REJECTED", "21") else hangup_cause
+                        )
+                    ),
+                }
+                tracer.record_event("carrier_signaling", carrier_details)
+            tracer.record_hangup(cause=hangup_cause, source=hangup_source, duration=duration)
+            db.finalize_call(eff_uuid, status="hung_up", batch_id=batch_id)
         dialer.on_call_ended(call_uuid, phone_number=to_number)
     return {"status": "ok"}
 
@@ -280,10 +281,28 @@ async def hangup_webhook(request: Request):
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     query_params = dict(websocket.query_params)
-    call_uuid = query_params.get("call_uuid", "unknown_call")
-    to_number = query_params.get("to", "")
-    batch_id = query_params.get("batch_id") or (dialer.active_call.get("batch_id") if dialer.active_call else None) or dialer.current_batch_id
-    template_id = query_params.get("template_id") or (dialer.active_call.get("template_id") if dialer.active_call else None) or dialer.selected_template_id
+    call_uuid = (
+        query_params.get("call_uuid")
+        or query_params.get("amp;call_uuid")
+        or "unknown_call"
+    )
+    to_number = (
+        query_params.get("to")
+        or query_params.get("amp;to")
+        or ""
+    )
+    batch_id = (
+        query_params.get("batch_id")
+        or query_params.get("amp;batch_id")
+        or (dialer.active_call.get("batch_id") if dialer.active_call else None)
+        or dialer.current_batch_id
+    )
+    template_id = (
+        query_params.get("template_id")
+        or query_params.get("amp;template_id")
+        or (dialer.active_call.get("template_id") if dialer.active_call else None)
+        or dialer.selected_template_id
+    )
     dialer.set_call_status(call_uuid, "in_call")
     tracer = diagnostics.get_tracer(call_uuid, phone_number=to_number, batch_id=batch_id)
 
