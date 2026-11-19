@@ -498,11 +498,10 @@ export default function BatchesTab({
 
           <div className="flex items-center gap-2">
             <span
-              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider border ${
-                isCompleted
+              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider border ${isCompleted
                   ? 'bg-slate-100 text-slate-600 border-slate-200'
                   : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-              }`}
+                }`}
             >
               <span className={`w-1.5 h-1.5 ${isCompleted ? 'bg-slate-400' : 'bg-emerald-500 animate-pulse'}`} />
               {(b.status || 'ACTIVE').toUpperCase()}
@@ -821,6 +820,7 @@ export default function BatchesTab({
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Run By</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Total Calls</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Dialed</TableHead>
+              <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Remaining</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Status</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Launch Date</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Outcome Breakdown</TableHead>
@@ -830,26 +830,26 @@ export default function BatchesTab({
           <TableBody>
             {filteredBatches.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-14 bg-muted/20">
-                  <Layers className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-50" />
-                  <p className="text-xs font-semibold text-foreground">
-                    {batchListSearch ? 'No batches match your search filter' : 'No campaign batches recorded yet'}
-                  </p>
-                  {batchListSearch ? (
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      onClick={() => setBatchListSearch('')}
-                      className="mt-2 text-xs font-semibold text-[#008792]"
-                    >
-                      Clear Search
-                    </Button>
-                  ) : (
-                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                      Select leads from the CRM Pending Queue and click 'Queue Selected to Dialer' to launch a batch.
+                  <TableCell colSpan={10} className="text-center py-14 bg-muted/20">
+                    <Layers className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-50" />
+                    <p className="text-xs font-semibold text-foreground">
+                      {batchListSearch ? 'No batches match your search filter' : 'No campaign batches recorded yet'}
                     </p>
-                  )}
-                </TableCell>
+                    {batchListSearch ? (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() => setBatchListSearch('')}
+                        className="mt-2 text-xs font-semibold text-[#008792]"
+                      >
+                        Clear Search
+                      </Button>
+                    ) : (
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        Select leads from the CRM Pending Queue and click 'Queue Selected to Dialer' to launch a batch.
+                      </p>
+                    )}
+                  </TableCell>
               </TableRow>
             ) : (
               filteredBatches.map((b) => {
@@ -898,6 +898,14 @@ export default function BatchesTab({
                     <TableCell className="px-2.5 py-1.5 whitespace-nowrap font-mono text-xs">
                       <span className="text-foreground font-medium">{dialed}</span>
                       <span className="text-muted-foreground text-[11px] ml-1">({pct}%)</span>
+                    </TableCell>
+
+                    {/* Remaining / Pending */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap font-mono text-xs">
+                      <span className={cn('font-semibold', total - dialed > 0 ? 'text-amber-600' : 'text-muted-foreground')}>
+                        {Math.max(0, total - dialed)}
+                      </span>
+                      <span className="text-muted-foreground text-[10px] ml-1">pending</span>
                     </TableCell>
 
                     {/* Status */}

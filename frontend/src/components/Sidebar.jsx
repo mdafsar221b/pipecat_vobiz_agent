@@ -122,7 +122,7 @@ export default function AppSidebar({
             <span>Platform</span>
             {activeCallsCount > 0 && (
               <span className="text-[9px] text-emerald-500 font-mono font-normal">
-                {activeCallsCount}/{maxConcurrency} Parallel
+                {activeCallsCount} Active Call
               </span>
             )}
           </SidebarGroupLabel>
@@ -179,11 +179,11 @@ export default function AppSidebar({
               <div className="grid flex-1 text-left leading-tight min-w-0">
                 <span className="truncate font-mono text-[10px] font-medium text-sidebar-foreground">
                   {activeCallsCount > 0
-                    ? `${activeCallsCount}/${maxConcurrency} Parallel Live`
-                    : '20 Channels Ready'}
+                  ? `${activeCallsCount} Call Active`
+                    : 'Auto Dialer Ready'}
                 </span>
                 <span className="truncate text-[9px] text-muted-foreground">
-                  {isRunning ? (isPaused ? 'Dialer Paused' : 'Parallel Calling') : 'Outbound Idle'}
+                  {isRunning ? (isPaused ? 'Dialer Paused' : 'Sequential Calling (1-by-1)') : 'Outbound Idle'}
                 </span>
               </div>
               <Badge

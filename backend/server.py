@@ -336,8 +336,22 @@ async def trigger_dial(request: Request, current_user: Optional[Dict[str, Any]] 
         answer_url = f"{public_url}/answer?to={to_number}&template_id={template_id}"
         hangup_url = f"{public_url}/hangup"
 
-        creator_id = current_user.get("id") if current_user else None
-        creator_name = current_user.get("name") if current_user else "Manual Dial"
+        creator_id = (
+            (current_user.get("id") if current_user else None)
+            or payload.get("created_by_id")
+            or request.headers.get("x-user-id")
+        )
+        creator_name = (
+            (current_user.get("name") if current_user else None)
+            or payload.get("created_by_name")
+            or request.headers.get("x-user-name")
+            or "Manual Dial"
+        )
+        creator_email = (
+            (current_user.get("email") if current_user else None)
+            or payload.get("created_by_email")
+            or request.headers.get("x-user-email")
+        )
 
         try:
             result = await vobiz_api.place_call(
@@ -355,11 +369,12 @@ async def trigger_dial(request: Request, current_user: Optional[Dict[str, Any]] 
                 template_id=template_id,
                 created_by_id=creator_id,
                 created_by_name=creator_name,
+                created_by_email=creator_email,
             )
             db.record_call_start(
                 call_uuid=call_uuid,
                 phone_number=to_number,
-                metadata={"customer_name": payload.get("customer_name", ""), "status": "dialing"},
+                metadata={"customer_name": payload.get("customer_name", ""), "status": "dialing", "request_uuid": call_uuid},
                 created_by_id=creator_id,
                 created_by_name=creator_name,
             )

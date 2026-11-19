@@ -664,10 +664,24 @@ def finalize_call(
 
 # Retrieve a single call record by uuid
 def get_call(call_uuid: str) -> Optional[Dict[str, Any]]:
+    if not call_uuid:
+        return None
     col = get_collection()
     if col is not None:
         try:
-            doc = col.find_one({"call_uuid": call_uuid}, {"_id": 0})
+            clean_uuid = str(call_uuid).strip()
+            query: Dict[str, Any] = {
+                "$or": [
+                    {"call_uuid": clean_uuid},
+                    {"request_uuid": clean_uuid},
+                    {"metadata.request_uuid": clean_uuid},
+                    {"metadata.req_uuid": clean_uuid},
+                    {"metadata.CallUUID": clean_uuid},
+                ]
+            }
+            if len(clean_uuid) >= 8:
+                query["$or"].append({"call_uuid": {"$regex": f"^{re.escape(clean_uuid)}", "$options": "i"}})
+            doc = col.find_one(query, {"_id": 0})
             if doc:
                 doc["turns"] = doc.get("transcripts", [])
                 doc["duration"] = doc.get("duration_seconds", 0) or 0

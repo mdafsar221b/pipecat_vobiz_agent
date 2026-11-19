@@ -266,7 +266,15 @@ class OutboundDialer:
         for uuid, call in list(self.active_calls.items()):
             # 1. Immediate sync: if MongoDB already marked call as finished, pop it immediately!
             doc = db.get_call(uuid) if uuid else None
-            if doc and (doc.get("ended_at") or doc.get("status") in ("hung_up", "completed", "failed")):
+            if not doc and call.get("phone_number"):
+                col = db.get_collection()
+                if col is not None:
+                    try:
+                        doc = col.find_one({"phone_number": call["phone_number"]}, {"_id": 0}, sort=[("created_at", -1)])
+                    except Exception:
+                        pass
+
+            if doc and (doc.get("ended_at") or doc.get("status") in ("hung_up", "completed", "failed") or doc.get("disposition")):
                 logger.info(f"Watchdog auto-clearing DB-finished call {uuid[:8]} (status: {doc.get('status')}, disposition: {doc.get('disposition')})")
                 self.on_call_ended(uuid, phone_number=call.get("phone_number"))
                 continue
@@ -274,7 +282,7 @@ class OutboundDialer:
             elapsed = now - call.get("started_at", now)
             status = call.get("status", "dialing")
             turns_count = len(doc.get("turns", [])) if doc else 0
-            if (status == "dialing" and elapsed > 45.0) or (status == "in_call" and elapsed > 300.0 and turns_count == 0) or elapsed > 900.0:
+            if (status == "dialing" and elapsed > 45.0) or (status == "in_call" and elapsed > 120.0 and turns_count == 0) or elapsed > 360.0:
                 logger.warning(f"Watchdog terminating stuck call {uuid} ({status}) after {elapsed:.1f}s")
                 try:
                     db.finalize_call(
@@ -370,6 +378,7 @@ class OutboundDialer:
         template_id: Optional[str] = None,
         created_by_id: Optional[str] = None,
         created_by_name: Optional[str] = None,
+        created_by_email: Optional[str] = None,
     ):
         if not call_uuid:
             return
@@ -381,6 +390,7 @@ class OutboundDialer:
             "template_id": template_id or self.selected_template_id,
             "created_by_id": created_by_id,
             "created_by_name": created_by_name or "System",
+            "created_by_email": created_by_email,
             "status": status,
             "started_at": time.time(),
         }
@@ -509,10 +519,11 @@ class OutboundDialer:
         tpl_id = pending_item.get("template_id") or self.selected_template_id
         creator_id = pending_item.get("created_by_id")
         creator_name = pending_item.get("created_by_name")
+        creator_email = pending_item.get("created_by_email")
 
         logger.info(
-            f"🚀 [Channel Slot] Dialer placing parallel call to {target_phone} "
-            f"(batch: {batch_id}, active channels: {len(self.active_calls) + 1}/{self.max_concurrency})"
+            f"🚀 [Sequential Slot] Dialer placing call to {target_phone} by {creator_name or 'System'} "
+            f"(batch: {batch_id}, active calls: {len(self.active_calls) + 1})"
         )
 
         call_answer_url = f"{public_url}/answer?batch_id={batch_id or ''}&lead_id={lead_id}&to={target_phone}&template_id={tpl_id}"
@@ -535,6 +546,7 @@ class OutboundDialer:
                 template_id=tpl_id,
                 created_by_id=creator_id,
                 created_by_name=creator_name,
+                created_by_email=creator_email,
             )
             tracer = diagnostics.get_tracer(call_uuid, phone_number=target_phone, batch_id=batch_id)
             tracer.record_event("call_initiated", {
@@ -563,15 +575,17 @@ class OutboundDialer:
             tracer = diagnostics.get_tracer(pending_item.get("id", str(time.time())), phone_number=target_phone, batch_id=batch_id)
             tracer.record_error("api_call_failed", str(exc))
 
-    # Continuous background worker placing calls in parallel up to max_concurrency
+    # Continuous background worker placing calls sequentially (strictly 1-by-1 per user)
     async def _dial_loop(self, public_url: str):
         while any(st == "running" for st in self.user_statuses.values()) or self.status == "running":
-            # 1. Concurrency gate: check active parallel calls capacity
+            # 1. Global concurrency gate
             if len(self.active_calls) >= self.max_concurrency:
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.5)
                 continue
 
             # 2. Find next pending lead for any user currently in 'running' status
+            # STRICT SEQUENTIAL CALLING (1-BY-1):
+            # A user's next call is ONLY dispatched after their previous call has fully ended!
             pending_item = None
             for item in self.queue:
                 if item.get("status") == "pending":
@@ -584,15 +598,29 @@ class OutboundDialer:
                         or (self.user_statuses.get(c_email) if c_email else None)
                         or (self.user_statuses.get(c_name) if c_name else None)
                     )
-                    # Only dispatch this lead if its creator is running, or if single user running globally
-                    if user_st == "running" or (user_st is None and self.status == "running" and len(self.user_statuses) <= 1):
-                        pending_item = item
-                        break
+                    is_user_running = (
+                        user_st == "running"
+                        or (user_st is None and self.status == "running" and len(self.user_statuses) <= 1)
+                    )
+                    if not is_user_running:
+                        continue
+
+                    # Sequential Guard: Does this user already have an active call in progress?
+                    user_has_active_call = any(
+                        self._matches_user(c, c_id, c_name, c_email)
+                        for c in self.active_calls.values()
+                    )
+                    if user_has_active_call:
+                        # User is already on a call! Wait for it to finish before starting next lead.
+                        continue
+
+                    pending_item = item
+                    break
 
             if not pending_item:
-                # If leads are done but parallel calls are still live, wait
+                # If leads are done or users are waiting for active calls to finish, wait
                 if self.active_calls:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(0.8)
                     continue
 
                 # Auto-idle users who have completed their queues
@@ -617,10 +645,10 @@ class OutboundDialer:
                 await asyncio.sleep(0.5)
                 continue
 
-            # 3. Fire parallel call asynchronously
+            # 3. Fire sequential call for this user
             asyncio.create_task(self._dispatch_single_call(pending_item, public_url))
 
-            # 4. Pacing interval between initiating concurrent calls
+            # 4. Pacing interval between initiating calls
             await asyncio.sleep(self.cooldown_seconds)
 
     # Callback when call terminates to update dialer state
@@ -714,7 +742,14 @@ class OutboundDialer:
         # Auto-clean any calls in self.active_calls that DB already reports as ended
         for uuid, c in list(self.active_calls.items()):
             doc = db.get_call(uuid) if uuid else None
-            if doc and (doc.get("ended_at") or doc.get("status") in ("hung_up", "completed", "failed")):
+            if not doc and c.get("phone_number"):
+                col = db.get_collection()
+                if col is not None:
+                    try:
+                        doc = col.find_one({"phone_number": c["phone_number"]}, {"_id": 0}, sort=[("created_at", -1)])
+                    except Exception:
+                        pass
+            if doc and (doc.get("ended_at") or doc.get("status") in ("hung_up", "completed", "failed") or doc.get("disposition")):
                 self.on_call_ended(uuid, phone_number=c.get("phone_number"))
 
         # Strict user isolation: never leak one user's queue or active calls into another user's session

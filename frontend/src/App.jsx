@@ -184,8 +184,7 @@ export default function App() {
           if (Date.now() / 1000 - lc.ended_at < 12) {
             setManualDialStatus(disp);
             setManualDialFeedback(
-              `Call finished (${lc.duration}s). ${
-                lc.diagnostic?.root_cause_summary || `Disposition: ${lc.disposition}`
+              `Call finished (${lc.duration}s). ${lc.diagnostic?.root_cause_summary || `Disposition: ${lc.disposition}`
               }`
             );
           }
@@ -530,7 +529,7 @@ export default function App() {
               <SidebarTrigger className="-ml-1" />
               <Separator orientation="vertical" className="mr-2 h-4" />
               <div className="text-sm font-semibold tracking-tight text-foreground">
-                {activeNav === 'live' && 'Live Monitor & Parallel Dialer'}
+                {activeNav === 'live' && 'Live Monitor & Dialer'}
                 {activeNav === 'pending' && 'CRM Missed Calls (Pending Queue)'}
                 {activeNav === 'batches' && 'Campaign Batches'}
                 {activeNav === 'templates' && 'Campaign Scripts & Prompts'}
@@ -538,13 +537,13 @@ export default function App() {
                 {activeNav === 'users' && 'Team & Employee Management'}
               </div>
 
-              {/* Parallel Capacity Pill */}
+              {/* Sequential Mode Pill */}
               <Badge
                 variant="outline"
-                className="hidden sm:inline-flex items-center gap-1 text-[10px] font-mono font-medium ml-2 border-[#008792]/30 text-[#008792] bg-[#008792]/5"
+                className="hidden sm:inline-flex items-center gap-1 text-[10px] font-mono font-medium ml-2 border-emerald-500/30 text-emerald-700 bg-emerald-500/5"
               >
-                <Radio className="size-2.5 animate-pulse text-[#008792]" />
-                Trunk: {activeCount}/{maxConcurrency} Concurrent
+                <span className="size-1.5 rounded-full bg-emerald-500 inline-block" />
+                Mode: Sequential (1-by-1)
               </Badge>
             </div>
 

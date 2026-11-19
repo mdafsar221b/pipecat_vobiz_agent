@@ -73,8 +73,8 @@ export default function LiveConsoleView({
                 isRunning && !isPaused
                   ? 'bg-emerald-500 animate-pulse'
                   : isPaused
-                  ? 'bg-amber-500'
-                  : 'bg-muted-foreground'
+                    ? 'bg-amber-500'
+                    : 'bg-muted-foreground'
               )}
             />
             <h1 className="text-sm font-bold text-foreground tracking-tight">
@@ -89,8 +89,8 @@ export default function LiveConsoleView({
               isRunning && !isPaused
                 ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700'
                 : isPaused
-                ? 'border-amber-500/40 bg-amber-500/10 text-amber-700'
-                : 'border-border bg-muted/40 text-muted-foreground'
+                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-700'
+                  : 'border-border bg-muted/40 text-muted-foreground'
             )}
           >
             <Radio className="w-2.5 h-2.5 animate-pulse" />
@@ -100,7 +100,7 @@ export default function LiveConsoleView({
           <div className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono text-muted-foreground bg-muted/30 border border-border rounded">
             <ShieldCheck className="w-3.5 h-3.5 text-[#008792]" />
             <span>
-              Trunk: <strong className="text-foreground font-mono">100.1.251.10</strong>
+              Mode: <strong className="text-foreground font-mono">Sequential (1-by-1)</strong>
             </span>
           </div>
         </div>
@@ -203,8 +203,8 @@ export default function LiveConsoleView({
                   isRunning && !isPaused
                     ? 'border-emerald-500/40 bg-emerald-50 text-emerald-700'
                     : isPaused
-                    ? 'border-amber-500/40 bg-amber-50 text-amber-700'
-                    : 'border-border text-muted-foreground'
+                      ? 'border-amber-500/40 bg-amber-50 text-amber-700'
+                      : 'border-border text-muted-foreground'
                 )}
               >
                 {isRunning ? (isPaused ? 'PAUSED' : 'ACTIVE') : 'IDLE'}
