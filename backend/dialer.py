@@ -266,8 +266,8 @@ class OutboundDialer:
         for uuid, call in list(self.active_calls.items()):
             # 1. Immediate sync: if MongoDB already marked call as finished, pop it immediately!
             doc = db.get_call(uuid) if uuid else None
-            if doc and (doc.get("ended_at") or doc.get("status") in ("hung_up", "completed") or doc.get("disposition")):
-                logger.info(f"Watchdog auto-clearing DB-finished call {uuid[:8]} (disposition: {doc.get('disposition')})")
+            if doc and (doc.get("ended_at") or doc.get("status") in ("hung_up", "completed", "failed")):
+                logger.info(f"Watchdog auto-clearing DB-finished call {uuid[:8]} (status: {doc.get('status')}, disposition: {doc.get('disposition')})")
                 self.on_call_ended(uuid, phone_number=call.get("phone_number"))
                 continue
 
@@ -714,7 +714,7 @@ class OutboundDialer:
         # Auto-clean any calls in self.active_calls that DB already reports as ended
         for uuid, c in list(self.active_calls.items()):
             doc = db.get_call(uuid) if uuid else None
-            if doc and (doc.get("ended_at") or doc.get("status") in ("hung_up", "completed") or doc.get("disposition")):
+            if doc and (doc.get("ended_at") or doc.get("status") in ("hung_up", "completed", "failed")):
                 self.on_call_ended(uuid, phone_number=c.get("phone_number"))
 
         # Strict user isolation: never leak one user's queue or active calls into another user's session

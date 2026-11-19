@@ -1,8 +1,9 @@
+
 module.exports = {
   apps: [
     {
       name: "pipecat-vobiz-frontend",
-      cwd: "/root/Aibot/outbound-ai/pipecat_vobiz_agent/frontend",
+      cwd: "/root/Aibot/pipecat_vobiz_agent/frontend",
       script: "npm",
       args: "run dev -- --host 0.0.0.0 --port 3003 --strictPort",
       interpreter: "none",
@@ -20,8 +21,8 @@ module.exports = {
     },
     {
       name: "pipecat-vobiz-backend",
-      cwd: "/root/Aibot/outbound-ai/pipecat_vobiz_agent/backend",
-      script: "/root/Aibot/outbound-ai/pipecat_vobiz_agent/.venv/bin/python",
+      cwd: "/root/Aibot/pipecat_vobiz_agent/backend",
+      script: "/root/Aibot/pipecat_vobiz_agent/.venv/bin/python",
       args: "-m uvicorn server:app --host 0.0.0.0 --port 8011",
       interpreter: "none",
       autorestart: true,

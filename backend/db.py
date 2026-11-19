@@ -341,7 +341,7 @@ def record_call_start(
         "status": "in_progress",
         "created_at": now_iso(),
         "start_time": time.time(),
-        "disposition": "not_talking",
+        "disposition": None,
         "customer_name": (metadata.get("customer_name") if metadata else None),
         "callback_time": None,
         "reason": None,
