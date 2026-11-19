@@ -367,12 +367,25 @@ async def trigger_dial(request: Request, current_user: Optional[Dict[str, Any]] 
         except Exception as exc:
             return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
-# Retrieve dialer and campaign status for UI HUD (scoped to current user's queue & active calls)
+# Retrieve dialer and campaign status for UI HUD (strictly scoped to current user's queue & active calls)
 @app.get("/api/campaign/status")
-async def get_campaign_status(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
-    user_id = current_user.get("id") if current_user else None
-    user_name = current_user.get("name") if current_user else None
-    return dialer.get_status_payload(user_id=user_id, user_name=user_name)
+async def get_campaign_status(
+    request: Request,
+    user_id: Optional[str] = None,
+    user_name: Optional[str] = None,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    import urllib.parse
+    eff_id = (current_user.get("id") if current_user else None) or user_id or request.headers.get("x-user-id")
+    eff_name = (current_user.get("name") if current_user else None) or user_name or request.headers.get("x-user-name")
+    eff_email = (current_user.get("email") if current_user else None) or request.headers.get("x-user-email")
+    if eff_name and "%" in eff_name:
+        try:
+            eff_name = urllib.parse.unquote(eff_name)
+        except Exception:
+            pass
+
+    return dialer.get_status_payload(user_id=eff_id, user_name=eff_name, user_email=eff_email)
 
 # Fetch CRM pending missed calls
 @app.get("/api/crm/pending-calls")
@@ -387,14 +400,34 @@ async def get_crm_pending_calls(
 # Queue selected leads into outbound campaign with creator attribution
 @app.post("/api/campaign/leads")
 async def queue_campaign_leads(request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    import urllib.parse
     payload = await request.json()
     leads = payload.get("leads", [])
     batch_name = payload.get("batch_name")
     source_filter = payload.get("source_filter")
     template_id = payload.get("template_id")
-    creator_id = (current_user.get("id") if current_user else None) or payload.get("created_by_id")
-    creator_name = (current_user.get("name") if current_user else None) or payload.get("created_by_name") or "Super Admin"
-    creator_email = (current_user.get("email") if current_user else None) or payload.get("created_by_email")
+    creator_id = (
+        (current_user.get("id") if current_user else None)
+        or payload.get("created_by_id")
+        or request.headers.get("x-user-id")
+    )
+    creator_name = (
+        (current_user.get("name") if current_user else None)
+        or payload.get("created_by_name")
+        or request.headers.get("x-user-name")
+    )
+    creator_email = (
+        (current_user.get("email") if current_user else None)
+        or payload.get("created_by_email")
+        or request.headers.get("x-user-email")
+    )
+    if creator_name and "%" in creator_name:
+        try:
+            creator_name = urllib.parse.unquote(creator_name)
+        except Exception:
+            pass
+    if not creator_name:
+        creator_name = "Super Admin" if creator_id == "admin_root" else "Employee"
 
     batch_id = dialer.queue_leads(
         leads,
@@ -461,39 +494,123 @@ async def select_campaign_template(request: Request):
 
 # Start OBD automated calling for user's queue
 @app.post("/api/campaign/start")
-async def start_campaign(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
-    user_id = (current_user.get("id") if current_user else None) or "default"
-    dialer.start_user(user_id, get_public_url())
-    return {"ok": True, "status": dialer.get_user_status(user_id)}
+async def start_campaign(request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    user_id = (
+        (current_user.get("id") if current_user else None)
+        or body.get("user_id")
+        or request.headers.get("x-user-id")
+        or "default"
+    )
+    user_name = (
+        (current_user.get("name") if current_user else None)
+        or body.get("user_name")
+        or request.headers.get("x-user-name")
+    )
+    if user_name and "%" in user_name:
+        import urllib.parse
+        try:
+            user_name = urllib.parse.unquote(user_name)
+        except Exception:
+            pass
+    dialer.start_user(user_id, get_public_url(), user_name=user_name)
+    return {"ok": True, "status": dialer.get_user_status(user_id, user_name)}
 
 # Pause OBD automated calling for user's queue
 @app.post("/api/campaign/pause")
-async def pause_campaign(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
-    user_id = (current_user.get("id") if current_user else None) or "default"
-    dialer.pause_user(user_id)
-    return {"ok": True, "status": dialer.get_user_status(user_id)}
+async def pause_campaign(request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    user_id = (
+        (current_user.get("id") if current_user else None)
+        or body.get("user_id")
+        or request.headers.get("x-user-id")
+        or "default"
+    )
+    user_name = (
+        (current_user.get("name") if current_user else None)
+        or body.get("user_name")
+        or request.headers.get("x-user-name")
+    )
+    dialer.pause_user(user_id, user_name=user_name)
+    return {"ok": True, "status": dialer.get_user_status(user_id, user_name)}
 
 # Resume OBD automated calling for user's queue
 @app.post("/api/campaign/resume")
-async def resume_campaign(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
-    user_id = (current_user.get("id") if current_user else None) or "default"
-    dialer.resume_user(user_id, get_public_url())
-    return {"ok": True, "status": dialer.get_user_status(user_id)}
+async def resume_campaign(request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    user_id = (
+        (current_user.get("id") if current_user else None)
+        or body.get("user_id")
+        or request.headers.get("x-user-id")
+        or "default"
+    )
+    user_name = (
+        (current_user.get("name") if current_user else None)
+        or body.get("user_name")
+        or request.headers.get("x-user-name")
+    )
+    dialer.resume_user(user_id, get_public_url(), user_name=user_name)
+    return {"ok": True, "status": dialer.get_user_status(user_id, user_name)}
 
 # Stop OBD automated calling for user's queue
 @app.post("/api/campaign/stop")
-async def stop_campaign(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
-    user_id = (current_user.get("id") if current_user else None) or "default"
-    dialer.stop_user(user_id)
-    return {"ok": True, "status": dialer.get_user_status(user_id)}
+async def stop_campaign(request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    user_id = (
+        (current_user.get("id") if current_user else None)
+        or body.get("user_id")
+        or request.headers.get("x-user-id")
+        or "default"
+    )
+    user_name = (
+        (current_user.get("name") if current_user else None)
+        or body.get("user_name")
+        or request.headers.get("x-user-name")
+    )
+    dialer.stop_user(user_id, user_name=user_name)
+    return {"ok": True, "status": dialer.get_user_status(user_id, user_name)}
 
 # Clear user's pending queue
 @app.post("/api/campaign/clear")
 @app.post("/api/campaign/reset")
-async def reset_campaign(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
-    user_id = (current_user.get("id") if current_user else None) or "default"
-    user_name = current_user.get("name") if current_user else None
-    dialer.reset_user(user_id, user_name)
+async def reset_campaign(request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    user_id = (
+        (current_user.get("id") if current_user else None)
+        or body.get("user_id")
+        or request.headers.get("x-user-id")
+        or "default"
+    )
+    user_name = (
+        (current_user.get("name") if current_user else None)
+        or body.get("user_name")
+        or request.headers.get("x-user-name")
+    )
+    user_email = (
+        (current_user.get("email") if current_user else None)
+        or request.headers.get("x-user-email")
+    )
+    dialer.reset_user(user_id, user_name, user_email)
     return {"ok": True, "status": "idle"}
 
 # Retrieve campaign batch list with creator attribution
@@ -700,8 +817,11 @@ async def list_calls(
     limit: int = 500,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
-    return db.get_recent_calls(limit=limit, start_date=start_date, end_date=end_date)
+    user_id = current_user.get("id") if current_user else None
+    is_admin = current_user.get("role") == "admin" if current_user else True
+    return db.get_recent_calls(limit=limit, start_date=start_date, end_date=end_date, user_id=user_id, is_admin=is_admin)
 
 # Update call record fields like disposition and callback time
 @app.api_route("/api/call/{call_uuid}", methods=["PATCH", "POST"])

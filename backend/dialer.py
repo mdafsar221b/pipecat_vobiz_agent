@@ -35,8 +35,36 @@ class OutboundDialer:
         self.current_batch_id: Optional[str] = None
         self.total_batch_leads: int = 0
         self.selected_template_id: str = "production_callback_conversion"
-        # Per-user isolated queue execution status: user_id -> "idle" | "running" | "paused"
+        # Per-user isolated queue execution status: user_id / user_name -> "idle" | "running" | "paused"
         self.user_statuses: Dict[str, str] = {}
+        # Per-user active batch tracker: user_id / user_name -> batch_id
+        self.user_current_batch: Dict[str, str] = {}
+        # Per-user last completed call: user_id / user_name -> call dict
+        self.user_last_call: Dict[str, Dict[str, Any]] = {}
+
+    def _matches_user(
+        self,
+        item: Optional[Dict[str, Any]],
+        user_id: Optional[str],
+        user_name: Optional[str] = None,
+        user_email: Optional[str] = None,
+    ) -> bool:
+        """Centralized helper to check whether a lead or call belongs to a specific user."""
+        if not item or not isinstance(item, dict):
+            return False
+        c_id = item.get("created_by_id")
+        c_email = item.get("created_by_email")
+        c_name = item.get("created_by_name")
+
+        if user_id and c_id and str(c_id).strip() == str(user_id).strip():
+            return True
+        if user_id and c_email and str(c_email).strip().lower() == str(user_id).strip().lower():
+            return True
+        if user_email and c_email and str(c_email).strip().lower() == str(user_email).strip().lower():
+            return True
+        if user_name and c_name and str(c_name).strip().lower() == str(user_name).strip().lower():
+            return True
+        return False
 
     @property
     def active_call(self) -> Optional[Dict[str, Any]]:
@@ -110,10 +138,21 @@ class OutboundDialer:
     ) -> str:
         batch_id = f"BATCH-{datetime_now_str()}"
         self.current_batch_id = batch_id
+        if created_by_id:
+            self.user_current_batch[created_by_id] = batch_id
+        if created_by_name:
+            self.user_current_batch[created_by_name] = batch_id
+        if created_by_email:
+            self.user_current_batch[created_by_email] = batch_id
 
-        # Keep existing pending items so multiple batches can run concurrently, clean up finished items if queue > 500
-        if len(self.queue) > 500:
-            self.queue = [item for item in self.queue if item.get("status") == "pending"]
+        # Clean up this user's PREVIOUS completed/finalized leads from active queue so they don't accumulate into new batches
+        self.queue = [
+            item for item in self.queue
+            if not (
+                self._matches_user(item, created_by_id, created_by_name, created_by_email)
+                and item.get("status") in ("completed", "failed")
+            )
+        ]
 
         effective_template_id = template_id or self.selected_template_id
         tpl = db.get_template(effective_template_id)
@@ -355,39 +394,57 @@ class OutboundDialer:
             latest["status"] = status
 
     # Per-user status controls for user-isolated queues
-    def start_user(self, user_id: str, public_url: str):
-        self.user_statuses[user_id] = "running"
+    def start_user(self, user_id: str, public_url: str, user_name: Optional[str] = None):
+        if user_id:
+            self.user_statuses[user_id] = "running"
+        if user_name:
+            self.user_statuses[user_name] = "running"
         self.start(public_url)
 
-    def pause_user(self, user_id: str):
-        self.user_statuses[user_id] = "paused"
+    def pause_user(self, user_id: str, user_name: Optional[str] = None):
+        if user_id:
+            self.user_statuses[user_id] = "paused"
+        if user_name:
+            self.user_statuses[user_name] = "paused"
 
-    def resume_user(self, user_id: str, public_url: str):
-        self.start_user(user_id, public_url)
+    def resume_user(self, user_id: str, public_url: str, user_name: Optional[str] = None):
+        self.start_user(user_id, public_url, user_name=user_name)
 
-    def stop_user(self, user_id: str):
-        self.user_statuses[user_id] = "idle"
+    def stop_user(self, user_id: str, user_name: Optional[str] = None):
+        if user_id:
+            self.user_statuses[user_id] = "idle"
+        if user_name:
+            self.user_statuses[user_name] = "idle"
         if not any(st == "running" for st in self.user_statuses.values()):
             self.status = "idle"
 
-    def reset_user(self, user_id: str, user_name: Optional[str] = None):
-        self.user_statuses[user_id] = "idle"
+    def reset_user(self, user_id: str, user_name: Optional[str] = None, user_email: Optional[str] = None):
+        if user_id:
+            self.user_statuses[user_id] = "idle"
+        if user_name:
+            self.user_statuses[user_name] = "idle"
+        if user_email:
+            self.user_statuses[user_email] = "idle"
+
         # Remove only this user's leads from queue
         self.queue = [
             i for i in self.queue
-            if (user_id and i.get("created_by_id") != user_id and i.get("created_by_email") != user_id)
-            and (not user_name or i.get("created_by_name") != user_name)
+            if not self._matches_user(i, user_id, user_name, user_email)
         ]
         # Auto-pop active calls belonging to this user
         for k, c in list(self.active_calls.items()):
-            if (user_id and (c.get("created_by_id") == user_id or c.get("created_by_email") == user_id)) or (user_name and c.get("created_by_name") == user_name):
+            if self._matches_user(c, user_id, user_name, user_email):
                 self.on_call_ended(k, phone_number=c.get("phone_number"))
 
         if not any(st == "running" for st in self.user_statuses.values()):
             self.status = "idle"
 
-    def get_user_status(self, user_id: str) -> str:
-        return self.user_statuses.get(user_id, "idle")
+    def get_user_status(self, user_id: Optional[str] = None, user_name: Optional[str] = None) -> str:
+        if user_id and user_id in self.user_statuses:
+            return self.user_statuses[user_id]
+        if user_name and user_name in self.user_statuses:
+            return self.user_statuses[user_name]
+        return "idle"
 
     # Start automated dialer loop
     def start(self, public_url: str):
@@ -518,10 +575,17 @@ class OutboundDialer:
             pending_item = None
             for item in self.queue:
                 if item.get("status") == "pending":
-                    creator_id = item.get("created_by_id")
-                    # If user status is explicitly running, or dialer is running globally
-                    user_st = self.user_statuses.get(creator_id)
-                    if user_st == "running" or (user_st is None and self.status == "running"):
+                    c_id = item.get("created_by_id")
+                    c_email = item.get("created_by_email")
+                    c_name = item.get("created_by_name")
+
+                    user_st = (
+                        (self.user_statuses.get(c_id) if c_id else None)
+                        or (self.user_statuses.get(c_email) if c_email else None)
+                        or (self.user_statuses.get(c_name) if c_name else None)
+                    )
+                    # Only dispatch this lead if its creator is running, or if single user running globally
+                    if user_st == "running" or (user_st is None and self.status == "running" and len(self.user_statuses) <= 1):
                         pending_item = item
                         break
 
@@ -533,14 +597,25 @@ class OutboundDialer:
 
                 # Auto-idle users who have completed their queues
                 for uid in list(self.user_statuses.keys()):
-                    u_has_pending = any(i.get("status") == "pending" and (i.get("created_by_id") == uid or i.get("created_by_email") == uid) for i in self.queue)
-                    u_has_active = any((c.get("created_by_id") == uid or c.get("created_by_email") == uid) for c in self.active_calls.values())
-                    if not u_has_pending and not u_has_active:
-                        self.user_statuses[uid] = "idle"
+                    if self.user_statuses.get(uid) == "running":
+                        u_has_pending = any(
+                            i.get("status") == "pending" and self._matches_user(i, uid, uid, uid)
+                            for i in self.queue
+                        )
+                        u_has_active = any(
+                            self._matches_user(c, uid, uid, uid)
+                            for c in self.active_calls.values()
+                        )
+                        if not u_has_pending and not u_has_active:
+                            self.user_statuses[uid] = "idle"
+                            logger.info(f"User {uid} completed their call queue. Status set to idle.")
 
-                logger.info("All pending calls processed across active users. Dialer idle.")
-                self.status = "idle"
-                break
+                if not any(st == "running" for st in self.user_statuses.values()):
+                    logger.info("All pending calls processed across active users. Dialer idle.")
+                    self.status = "idle"
+                    break
+                await asyncio.sleep(0.5)
+                continue
 
             # 3. Fire parallel call asynchronously
             asyncio.create_task(self._dispatch_single_call(pending_item, public_url))
@@ -590,7 +665,7 @@ class OutboundDialer:
             eff_uuid = ended_call_info.get("call_uuid") or call_uuid
             duration = round(time.time() - ended_call_info.get("started_at", time.time()), 1)
             doc = db.get_call(eff_uuid) if eff_uuid else None
-            self.last_call = {
+            call_summary = {
                 **ended_call_info,
                 "duration": doc.get("duration", duration) if doc else duration,
                 "disposition": doc.get("disposition", "completed") if doc else "completed",
@@ -598,6 +673,16 @@ class OutboundDialer:
                 "turns": doc.get("turns", []) if doc else [],
                 "diagnostic": doc.get("diagnostic", {}) if doc else {},
             }
+            self.last_call = call_summary
+            c_uid = ended_call_info.get("created_by_id")
+            c_uname = ended_call_info.get("created_by_name")
+            c_email = ended_call_info.get("created_by_email")
+            if c_uid:
+                self.user_last_call[c_uid] = call_summary
+            if c_uname:
+                self.user_last_call[c_uname] = call_summary
+            if c_email:
+                self.user_last_call[c_email] = call_summary
             logger.info(
                 f"📴 Call {str(eff_uuid)[:8]} ended. Active channels: {len(self.active_calls)}/{self.max_concurrency}"
             )
@@ -618,7 +703,12 @@ class OutboundDialer:
                     db.finalize_batch(b_id, status="completed")
 
     # Format live dialer status payload for UI polling with user-isolated queue and active calls
-    def get_status_payload(self, user_id: Optional[str] = None, user_name: Optional[str] = None) -> Dict[str, Any]:
+    def get_status_payload(
+        self,
+        user_id: Optional[str] = None,
+        user_name: Optional[str] = None,
+        user_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
         self._check_watchdog()
 
         # Auto-clean any calls in self.active_calls that DB already reports as ended
@@ -627,28 +717,29 @@ class OutboundDialer:
             if doc and (doc.get("ended_at") or doc.get("status") in ("hung_up", "completed") or doc.get("disposition")):
                 self.on_call_ended(uuid, phone_number=c.get("phone_number"))
 
-        # Determine user scope
-        if user_id or user_name:
+        # Strict user isolation: never leak one user's queue or active calls into another user's session
+        if user_id or user_name or user_email:
             user_queue = [
                 i for i in self.queue
-                if (user_id and (i.get("created_by_id") == user_id or i.get("created_by_email") == user_id))
-                or (user_name and i.get("created_by_name") == user_name)
+                if self._matches_user(i, user_id, user_name, user_email)
             ]
             user_active_calls = {
                 k: v for k, v in self.active_calls.items()
-                if (user_id and (v.get("created_by_id") == user_id or v.get("created_by_email") == user_id))
-                or (user_name and v.get("created_by_name") == user_name)
+                if self._matches_user(v, user_id, user_name, user_email)
             }
-            user_status = self.user_statuses.get(user_id, "idle") if user_id else "idle"
+            user_status = self.get_user_status(user_id, user_name)
             # If user has no pending items and no active calls, force status to idle
-            if not user_queue and not user_active_calls:
+            has_pending = any(i.get("status") == "pending" for i in user_queue)
+            if not has_pending and not user_active_calls:
                 user_status = "idle"
                 if user_id:
                     self.user_statuses[user_id] = "idle"
+                if user_name:
+                    self.user_statuses[user_name] = "idle"
         else:
-            user_queue = self.queue
-            user_active_calls = self.active_calls
-            user_status = self.status
+            user_queue = []
+            user_active_calls = {}
+            user_status = "idle"
 
         # Format user's active call list
         active_list: List[Dict[str, Any]] = []
@@ -676,7 +767,13 @@ class OutboundDialer:
         total_leads = len(user_queue)
 
         # Batch-wise metrics for user's active batch
-        user_batch_id = user_queue[0].get("batch_id") if user_queue else (list(user_active_calls.values())[0].get("batch_id") if user_active_calls else None)
+        user_batch_id = (
+            (self.user_current_batch.get(user_id) if user_id else None)
+            or (self.user_current_batch.get(user_name) if user_name else None)
+            or (self.user_current_batch.get(user_email) if user_email else None)
+            or (user_queue[0].get("batch_id") if user_queue else None)
+            or (list(user_active_calls.values())[0].get("batch_id") if user_active_calls else None)
+        )
         batch_metrics = db.get_batch_metrics(user_batch_id) if user_batch_id else {}
 
         kpi = {
@@ -698,22 +795,26 @@ class OutboundDialer:
 
         next_lead = next((i for i in user_queue if i["status"] == "pending"), None)
 
-        recent = db.get_recent_calls(1)
-        last_rec = recent[0] if recent else None
-        last_completed = None
-        if self.last_call:
-            last_completed = self.last_call
-        elif last_rec:
-            last_completed = {
-                "call_uuid": last_rec.get("call_uuid", ""),
-                "phone_number": last_rec.get("phone_number", ""),
-                "customer_name": last_rec.get("customer_name") or "",
-                "disposition": last_rec.get("disposition", "completed"),
-                "duration": last_rec.get("duration", 0),
-                "ended_at": last_rec.get("ended_at_epoch") or time.time(),
-                "turns": last_rec.get("turns", []),
-                "diagnostic": last_rec.get("diagnostic", {}),
-            }
+        # User-scoped last completed call
+        last_completed = (
+            (self.user_last_call.get(user_id) if user_id else None)
+            or (self.user_last_call.get(user_name) if user_name else None)
+            or (self.user_last_call.get(user_email) if user_email else None)
+        )
+        if not last_completed and (user_id or user_name):
+            recent = db.get_recent_calls(1, user_id=user_id, is_admin=False)
+            if recent:
+                last_rec = recent[0]
+                last_completed = {
+                    "call_uuid": last_rec.get("call_uuid", ""),
+                    "phone_number": last_rec.get("phone_number", ""),
+                    "customer_name": last_rec.get("customer_name") or "",
+                    "disposition": last_rec.get("disposition", "completed"),
+                    "duration": last_rec.get("duration", 0),
+                    "ended_at": last_rec.get("ended_at_epoch") or time.time(),
+                    "turns": last_rec.get("turns", []),
+                    "diagnostic": last_rec.get("diagnostic", {}),
+                }
 
         return {
             "status": user_status,

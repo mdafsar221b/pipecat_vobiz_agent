@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Menu, X, Search, LogOut, Radio } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import { SidebarProvider, SidebarInset, SidebarTrigger } from './components/ui/sidebar';
@@ -148,7 +148,11 @@ export default function App() {
   const fetchCampaignStatus = useCallback(async () => {
     if (!getAuthToken()) return;
     try {
-      const res = await apiFetch('/api/campaign/status');
+      const activeUser = currentUser || getStoredUser();
+      const qParams = activeUser?.id
+        ? `?user_id=${encodeURIComponent(activeUser.id)}&user_name=${encodeURIComponent(activeUser.name || '')}`
+        : '';
+      const res = await apiFetch(`/api/campaign/status${qParams}`);
       if (!res.ok) return;
       const data = await res.json();
       setCampaignData(data);
@@ -302,7 +306,12 @@ export default function App() {
   // Campaign Actions
   const handleStartCampaign = async () => {
     try {
-      const res = await apiFetch('/api/campaign/start', { method: 'POST' });
+      const activeUser = currentUser || getStoredUser();
+      const res = await apiFetch('/api/campaign/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: activeUser?.id, user_name: activeUser?.name }),
+      });
       const data = await res.json();
       if (data.ok) {
         fetchCampaignStatus();
@@ -314,7 +323,12 @@ export default function App() {
 
   const handlePauseCampaign = async () => {
     try {
-      await apiFetch('/api/campaign/pause', { method: 'POST' });
+      const activeUser = currentUser || getStoredUser();
+      await apiFetch('/api/campaign/pause', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: activeUser?.id, user_name: activeUser?.name }),
+      });
       fetchCampaignStatus();
     } catch (err) {
       setAlertMessage(err.message);
@@ -323,7 +337,12 @@ export default function App() {
 
   const handleResumeCampaign = async () => {
     try {
-      await apiFetch('/api/campaign/resume', { method: 'POST' });
+      const activeUser = currentUser || getStoredUser();
+      await apiFetch('/api/campaign/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: activeUser?.id, user_name: activeUser?.name }),
+      });
       fetchCampaignStatus();
     } catch (err) {
       setAlertMessage(err.message);
@@ -332,7 +351,12 @@ export default function App() {
 
   const handleStopCampaign = async () => {
     try {
-      await apiFetch('/api/campaign/stop', { method: 'POST' });
+      const activeUser = currentUser || getStoredUser();
+      await apiFetch('/api/campaign/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: activeUser?.id, user_name: activeUser?.name }),
+      });
       fetchCampaignStatus();
     } catch (err) {
       setAlertMessage(err.message);
@@ -342,7 +366,12 @@ export default function App() {
   const handleResetQueue = async () => {
     if (!window.confirm('Clear active queue and reset counters to start a fresh batch?')) return;
     try {
-      const res = await apiFetch('/api/campaign/reset', { method: 'POST' });
+      const activeUser = currentUser || getStoredUser();
+      const res = await apiFetch('/api/campaign/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: activeUser?.id, user_name: activeUser?.name, user_email: activeUser?.email }),
+      });
       const data = await res.json();
       if (data.ok) {
         await fetchCampaignStatus();
@@ -355,7 +384,12 @@ export default function App() {
 
   const handleRetryFailed = async () => {
     try {
-      await apiFetch('/api/campaign/reset', { method: 'POST' });
+      const activeUser = currentUser || getStoredUser();
+      await apiFetch('/api/campaign/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: activeUser?.id, user_name: activeUser?.name, user_email: activeUser?.email }),
+      });
       fetchCampaignStatus();
     } catch (err) {
       setAlertMessage(err.message);

@@ -1,4 +1,4 @@
-﻿// Authentication state management and authenticated API fetch utility
+// Authentication state management and authenticated API fetch utility
 
 const TOKEN_KEY = 'swargaseema_auth_token';
 const USER_KEY = 'swargaseema_auth_user';
@@ -68,10 +68,20 @@ export function isAdmin() {
  */
 export async function apiFetch(url, options = {}) {
   const token = getAuthToken();
+  const user = getStoredUser();
   const headers = new Headers(options.headers || {});
 
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
+  }
+  if (user?.id && !headers.has('X-User-Id')) {
+    headers.set('X-User-Id', user.id);
+  }
+  if (user?.name && !headers.has('X-User-Name')) {
+    headers.set('X-User-Name', encodeURIComponent(user.name));
+  }
+  if (user?.email && !headers.has('X-User-Email')) {
+    headers.set('X-User-Email', user.email);
   }
 
   // If sending JSON body and content-type not set, set it

@@ -686,11 +686,19 @@ def get_recent_calls(
     limit: int = 500,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    user_id: Optional[str] = None,
+    is_admin: bool = True,
 ) -> List[Dict[str, Any]]:
     col = get_collection()
     if col is not None:
         try:
             query: Dict[str, Any] = {}
+            if not is_admin and user_id:
+                query["$or"] = [
+                    {"created_by_id": user_id},
+                    {"created_by": user_id},
+                    {"created_by_email": user_id},
+                ]
             if start_date and end_date:
                 query["created_at"] = {
                     "$gte": f"{start_date}T00:00:00",

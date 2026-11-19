@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   Play,
   Pause,
@@ -19,7 +19,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { apiFetch } from '../utils/auth';
+import { apiFetch, getStoredUser } from '../utils/auth';
 
 const PREDEFINED_TEST_CONTACTS = [
   { name: 'Afsar', phone: '+917007173798' },
@@ -108,6 +108,7 @@ export default function CampaignController({
     setTestBatchFeedback(`Queueing ${leads.length} contacts...`);
 
     try {
+      const activeUser = getStoredUser();
       const res = await apiFetch('/api/campaign/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -116,6 +117,9 @@ export default function CampaignController({
           batch_name: batchName,
           source_filter: 'Predefined Test Contacts',
           template_id: selectedTemplateId,
+          created_by_id: activeUser?.id,
+          created_by_name: activeUser?.name || 'Super Admin',
+          created_by_email: activeUser?.email,
         }),
       });
       const data = await res.json();
@@ -126,7 +130,14 @@ export default function CampaignController({
 
       if (startImmediately) {
         setTestBatchFeedback(`Starting OBD dialer for ${leads.length} calls...`);
-        await apiFetch('/api/campaign/start', { method: 'POST' });
+        await apiFetch('/api/campaign/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: activeUser?.id,
+            user_name: activeUser?.name,
+          }),
+        });
       }
 
       setTestBatchFeedback(

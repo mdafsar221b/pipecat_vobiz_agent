@@ -293,6 +293,14 @@ async def get_current_user(
     if creds and creds.credentials:
         token = creds.credentials
     if not token:
+        auth_hdr = request.headers.get("Authorization") or request.headers.get("authorization")
+        if auth_hdr:
+            parts = auth_hdr.strip().split(" ", 1)
+            if len(parts) == 2 and parts[0].lower() == "bearer":
+                token = parts[1].strip()
+            elif len(parts) == 1 and "." in parts[0]:
+                token = parts[0].strip()
+    if not token:
         token = request.cookies.get("auth_token") or request.query_params.get("token")
 
     if not token:
@@ -342,8 +350,37 @@ async def get_optional_user(
     request: Request,
     creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> Optional[Dict[str, Any]]:
-    """Optional authentication dependency: returns user if token present and valid, else None."""
+    """Optional authentication dependency: returns user if token present and valid, else falls back to user headers or None."""
     try:
         return await get_current_user(request, creds)
-    except HTTPException:
-        return None
+    except Exception:
+        pass
+
+    # Fallback to X-User-Id / X-User-Email / X-User-Name headers if available
+    x_id = request.headers.get("X-User-Id") or request.headers.get("x-user-id")
+    x_email = request.headers.get("X-User-Email") or request.headers.get("x-user-email")
+    x_name = request.headers.get("X-User-Name") or request.headers.get("x-user-name")
+    if x_name:
+        import urllib.parse
+        try:
+            x_name = urllib.parse.unquote(x_name)
+        except Exception:
+            pass
+
+    if x_id:
+        user = get_user_by_id(x_id)
+        if user:
+            return user
+    if x_email:
+        user = get_user_by_email(x_email)
+        if user:
+            return user
+    if x_id or x_name:
+        return {
+            "id": x_id or "user_slot",
+            "name": x_name or "Employee",
+            "email": x_email or "",
+            "role": "employee",
+            "is_active": True,
+        }
+    return None
