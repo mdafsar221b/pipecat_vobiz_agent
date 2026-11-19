@@ -35,6 +35,8 @@ class OutboundDialer:
         self.current_batch_id: Optional[str] = None
         self.total_batch_leads: int = 0
         self.selected_template_id: str = "production_callback_conversion"
+        # Per-user isolated queue execution status: user_id -> "idle" | "running" | "paused"
+        self.user_statuses: Dict[str, str] = {}
 
     @property
     def active_call(self) -> Optional[Dict[str, Any]]:
@@ -223,9 +225,17 @@ class OutboundDialer:
             return
         now = time.time()
         for uuid, call in list(self.active_calls.items()):
+            # 1. Immediate sync: if MongoDB already marked call as finished, pop it immediately!
+            doc = db.get_call(uuid) if uuid else None
+            if doc and (doc.get("ended_at") or doc.get("status") in ("hung_up", "completed") or doc.get("disposition")):
+                logger.info(f"Watchdog auto-clearing DB-finished call {uuid[:8]} (disposition: {doc.get('disposition')})")
+                self.on_call_ended(uuid, phone_number=call.get("phone_number"))
+                continue
+
             elapsed = now - call.get("started_at", now)
             status = call.get("status", "dialing")
-            if (status == "dialing" and elapsed > 60.0) or (status == "in_call" and elapsed > 1800.0):
+            turns_count = len(doc.get("turns", [])) if doc else 0
+            if (status == "dialing" and elapsed > 45.0) or (status == "in_call" and elapsed > 300.0 and turns_count == 0) or elapsed > 900.0:
                 logger.warning(f"Watchdog terminating stuck call {uuid} ({status}) after {elapsed:.1f}s")
                 try:
                     db.finalize_call(
@@ -238,7 +248,46 @@ class OutboundDialer:
                 except Exception as exc:
                     logger.error(f"Error finalizing stuck call {uuid} in watchdog: {exc}")
                 finally:
-                    self.on_call_ended(uuid)
+                    self.on_call_ended(uuid, phone_number=call.get("phone_number"))
+
+    # Link incoming telephony call_uuid with active call slot
+    def link_call_uuid(
+        self,
+        call_uuid: str,
+        to_number: Optional[str] = None,
+        req_uuid: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not call_uuid:
+            return None
+
+        # Already properly keyed
+        if call_uuid in self.active_calls:
+            return self.active_calls[call_uuid]
+
+        import re
+        target_digits = re.sub(r"\D", "", to_number or "")[-10:] if to_number else None
+
+        # Search by req_uuid or matching phone number
+        match_key = None
+        for k, c in list(self.active_calls.items()):
+            if req_uuid and (k == req_uuid or c.get("call_uuid") == req_uuid or c.get("request_uuid") == req_uuid):
+                match_key = k
+                break
+            if target_digits:
+                c_digits = re.sub(r"\D", "", c.get("phone_number", ""))[-10:]
+                if c_digits and c_digits == target_digits:
+                    match_key = k
+                    break
+
+        if match_key:
+            info = self.active_calls.pop(match_key)
+            info["call_uuid"] = call_uuid
+            info["request_uuid"] = match_key
+            self.active_calls[call_uuid] = info
+            logger.info(f"🔗 Re-keyed active call from {match_key[:8]} to Vobiz CallUUID {call_uuid[:8]} ({info.get('phone_number')})")
+            return info
+
+        return None
 
     # Calculate live counters for dialer UI
     def get_kpi_counts(self, batch_id: Optional[str] = None) -> Dict[str, int]:
@@ -302,9 +351,43 @@ class OutboundDialer:
         if call_uuid and call_uuid in self.active_calls:
             self.active_calls[call_uuid]["status"] = status
         elif self.active_calls and not call_uuid:
-            # fallback to latest
             latest = list(self.active_calls.values())[-1]
             latest["status"] = status
+
+    # Per-user status controls for user-isolated queues
+    def start_user(self, user_id: str, public_url: str):
+        self.user_statuses[user_id] = "running"
+        self.start(public_url)
+
+    def pause_user(self, user_id: str):
+        self.user_statuses[user_id] = "paused"
+
+    def resume_user(self, user_id: str, public_url: str):
+        self.start_user(user_id, public_url)
+
+    def stop_user(self, user_id: str):
+        self.user_statuses[user_id] = "idle"
+        if not any(st == "running" for st in self.user_statuses.values()):
+            self.status = "idle"
+
+    def reset_user(self, user_id: str, user_name: Optional[str] = None):
+        self.user_statuses[user_id] = "idle"
+        # Remove only this user's leads from queue
+        self.queue = [
+            i for i in self.queue
+            if (user_id and i.get("created_by_id") != user_id and i.get("created_by_email") != user_id)
+            and (not user_name or i.get("created_by_name") != user_name)
+        ]
+        # Auto-pop active calls belonging to this user
+        for k, c in list(self.active_calls.items()):
+            if (user_id and (c.get("created_by_id") == user_id or c.get("created_by_email") == user_id)) or (user_name and c.get("created_by_name") == user_name):
+                self.on_call_ended(k, phone_number=c.get("phone_number"))
+
+        if not any(st == "running" for st in self.user_statuses.values()):
+            self.status = "idle"
+
+    def get_user_status(self, user_id: str) -> str:
+        return self.user_statuses.get(user_id, "idle")
 
     # Start automated dialer loop
     def start(self, public_url: str):
@@ -327,6 +410,8 @@ class OutboundDialer:
     # Stop dialer and cancel active background loop
     def stop(self):
         self.status = "idle"
+        for uid in list(self.user_statuses.keys()):
+            self.user_statuses[uid] = "idle"
         if self.dialer_task and not self.dialer_task.done():
             self.dialer_task.cancel()
         logger.info("Outbound dialer stopped")
@@ -423,24 +508,38 @@ class OutboundDialer:
 
     # Continuous background worker placing calls in parallel up to max_concurrency
     async def _dial_loop(self, public_url: str):
-        while self.status == "running":
+        while any(st == "running" for st in self.user_statuses.values()) or self.status == "running":
             # 1. Concurrency gate: check active parallel calls capacity
             if len(self.active_calls) >= self.max_concurrency:
                 await asyncio.sleep(0.4)
                 continue
 
-            # 2. Find next pending lead
-            pending_item = next((item for item in self.queue if item["status"] == "pending"), None)
+            # 2. Find next pending lead for any user currently in 'running' status
+            pending_item = None
+            for item in self.queue:
+                if item.get("status") == "pending":
+                    creator_id = item.get("created_by_id")
+                    # If user status is explicitly running, or dialer is running globally
+                    user_st = self.user_statuses.get(creator_id)
+                    if user_st == "running" or (user_st is None and self.status == "running"):
+                        pending_item = item
+                        break
+
             if not pending_item:
-                # If leads are done but parallel calls are still live, wait for them to finish
+                # If leads are done but parallel calls are still live, wait
                 if self.active_calls:
                     await asyncio.sleep(1.0)
                     continue
 
-                logger.info("All pending calls processed across batches. Switching dialer to idle.")
+                # Auto-idle users who have completed their queues
+                for uid in list(self.user_statuses.keys()):
+                    u_has_pending = any(i.get("status") == "pending" and (i.get("created_by_id") == uid or i.get("created_by_email") == uid) for i in self.queue)
+                    u_has_active = any((c.get("created_by_id") == uid or c.get("created_by_email") == uid) for c in self.active_calls.values())
+                    if not u_has_pending and not u_has_active:
+                        self.user_statuses[uid] = "idle"
+
+                logger.info("All pending calls processed across active users. Dialer idle.")
                 self.status = "idle"
-                if self.current_batch_id:
-                    db.finalize_batch(self.current_batch_id, status="completed")
                 break
 
             # 3. Fire parallel call asynchronously
@@ -450,11 +549,47 @@ class OutboundDialer:
             await asyncio.sleep(self.cooldown_seconds)
 
     # Callback when call terminates to update dialer state
-    def on_call_ended(self, call_uuid: str):
-        ended_call_info = self.active_calls.pop(call_uuid, None)
+    def on_call_ended(self, call_uuid: str, phone_number: Optional[str] = None):
+        if not call_uuid and not phone_number:
+            return
+
+        import re
+        target_digits = re.sub(r"\D", "", phone_number or "")[-10:] if phone_number else None
+
+        ended_call_info = None
+
+        # 1. Exact match by call_uuid
+        if call_uuid and call_uuid in self.active_calls:
+            ended_call_info = self.active_calls.pop(call_uuid)
+
+        # 2. Match by call_uuid inside dict or prefix match
+        if not ended_call_info and call_uuid:
+            clean_uuid = str(call_uuid).strip().lower()
+            for k, c in list(self.active_calls.items()):
+                k_clean = str(k).strip().lower()
+                c_uuid = str(c.get("call_uuid", "")).strip().lower()
+                c_req = str(c.get("request_uuid", "")).strip().lower()
+                if (
+                    k_clean == clean_uuid
+                    or c_uuid == clean_uuid
+                    or c_req == clean_uuid
+                    or (len(clean_uuid) >= 8 and (k_clean.startswith(clean_uuid[:8]) or clean_uuid.startswith(k_clean[:8])))
+                ):
+                    ended_call_info = self.active_calls.pop(k)
+                    break
+
+        # 3. Match by 10-digit phone number
+        if not ended_call_info and target_digits:
+            for k, c in list(self.active_calls.items()):
+                c_digits = re.sub(r"\D", "", c.get("phone_number", ""))[-10:]
+                if c_digits and c_digits == target_digits:
+                    ended_call_info = self.active_calls.pop(k)
+                    break
+
         if ended_call_info:
+            eff_uuid = ended_call_info.get("call_uuid") or call_uuid
             duration = round(time.time() - ended_call_info.get("started_at", time.time()), 1)
-            doc = db.get_call(call_uuid)
+            doc = db.get_call(eff_uuid) if eff_uuid else None
             self.last_call = {
                 **ended_call_info,
                 "duration": doc.get("duration", duration) if doc else duration,
@@ -464,13 +599,15 @@ class OutboundDialer:
                 "diagnostic": doc.get("diagnostic", {}) if doc else {},
             }
             logger.info(
-                f"📴 Call {call_uuid[:8]} ended. Active channels: {len(self.active_calls)}/{self.max_concurrency}"
+                f"📴 Call {str(eff_uuid)[:8]} ended. Active channels: {len(self.active_calls)}/{self.max_concurrency}"
             )
 
+        # Mark in queue as completed
         for item in self.queue:
-            if item.get("call_uuid") == call_uuid:
+            q_uuid = item.get("call_uuid")
+            q_phone = re.sub(r"\D", "", item.get("phone_number", ""))[-10:] if target_digits else None
+            if (call_uuid and q_uuid == call_uuid) or (target_digits and q_phone == target_digits):
                 item["status"] = "completed"
-                break
 
         # Check if batch finished
         if ended_call_info:
@@ -480,13 +617,42 @@ class OutboundDialer:
                 if not has_pending:
                     db.finalize_batch(b_id, status="completed")
 
-    # Format live dialer status payload for UI polling with multi-channel active calls list
-    def get_status_payload(self) -> Dict[str, Any]:
-        kpi = self.get_kpi_counts()
-        next_lead = next((i for i in self.queue if i["status"] == "pending"), None)
+    # Format live dialer status payload for UI polling with user-isolated queue and active calls
+    def get_status_payload(self, user_id: Optional[str] = None, user_name: Optional[str] = None) -> Dict[str, Any]:
+        self._check_watchdog()
 
+        # Auto-clean any calls in self.active_calls that DB already reports as ended
+        for uuid, c in list(self.active_calls.items()):
+            doc = db.get_call(uuid) if uuid else None
+            if doc and (doc.get("ended_at") or doc.get("status") in ("hung_up", "completed") or doc.get("disposition")):
+                self.on_call_ended(uuid, phone_number=c.get("phone_number"))
+
+        # Determine user scope
+        if user_id or user_name:
+            user_queue = [
+                i for i in self.queue
+                if (user_id and (i.get("created_by_id") == user_id or i.get("created_by_email") == user_id))
+                or (user_name and i.get("created_by_name") == user_name)
+            ]
+            user_active_calls = {
+                k: v for k, v in self.active_calls.items()
+                if (user_id and (v.get("created_by_id") == user_id or v.get("created_by_email") == user_id))
+                or (user_name and v.get("created_by_name") == user_name)
+            }
+            user_status = self.user_statuses.get(user_id, "idle") if user_id else "idle"
+            # If user has no pending items and no active calls, force status to idle
+            if not user_queue and not user_active_calls:
+                user_status = "idle"
+                if user_id:
+                    self.user_statuses[user_id] = "idle"
+        else:
+            user_queue = self.queue
+            user_active_calls = self.active_calls
+            user_status = self.status
+
+        # Format user's active call list
         active_list: List[Dict[str, Any]] = []
-        for uuid, c_info in list(self.active_calls.items()):
+        for uuid, c_info in list(user_active_calls.items()):
             doc = db.get_call(uuid) if uuid else None
             turns = doc.get("turns", []) if doc else []
             elapsed = int(time.time() - c_info.get("started_at", time.time()))
@@ -503,6 +669,34 @@ class OutboundDialer:
                 "turns": turns,
                 "transcripts": turns,
             })
+
+        is_dialing = sum(1 for c in user_active_calls.values() if c.get("status") == "dialing")
+        is_incall = sum(1 for c in user_active_calls.values() if c.get("status") == "in_call")
+        pending_count = sum(1 for i in user_queue if i.get("status") == "pending")
+        total_leads = len(user_queue)
+
+        # Batch-wise metrics for user's active batch
+        user_batch_id = user_queue[0].get("batch_id") if user_queue else (list(user_active_calls.values())[0].get("batch_id") if user_active_calls else None)
+        batch_metrics = db.get_batch_metrics(user_batch_id) if user_batch_id else {}
+
+        kpi = {
+            "total": total_leads,
+            "pending": pending_count,
+            "dialing": is_dialing,
+            "in_call": is_incall,
+            "active": len(active_list),
+            "channels_active": len(active_list),
+            "max_concurrency": self.max_concurrency,
+            "interested": batch_metrics.get("interested", 0),
+            "not_interested": batch_metrics.get("not_interested", 0),
+            "wrong_number": batch_metrics.get("wrong_number", 0),
+            "not_talking": batch_metrics.get("not_talking", 0),
+            "no_answer": batch_metrics.get("no_answer", 0),
+            "dropped": batch_metrics.get("dropped", 0),
+            "retry_scheduled": 0,
+        }
+
+        next_lead = next((i for i in user_queue if i["status"] == "pending"), None)
 
         recent = db.get_recent_calls(1)
         last_rec = recent[0] if recent else None
@@ -522,18 +716,18 @@ class OutboundDialer:
             }
 
         return {
-            "status": self.status,
-            "is_running": self.status == "running",
-            "is_paused": self.status == "paused",
-            "running": self.status == "running",
-            "paused": self.status == "paused",
+            "status": user_status,
+            "is_running": user_status == "running",
+            "is_paused": user_status == "paused",
+            "running": user_status == "running",
+            "paused": user_status == "paused",
             "stats": kpi,
             "kpis": kpi,
             "counts": kpi,
             "channels_active": len(active_list),
             "max_concurrency": self.max_concurrency,
-            "total_queued": len(self.queue),
-            "pending_count": kpi["pending"],
+            "total_queued": len(user_queue),
+            "pending_count": pending_count,
             "active_calls": active_list,
             "active_call": active_list[0] if active_list else None,
             "last_completed_call": last_completed,

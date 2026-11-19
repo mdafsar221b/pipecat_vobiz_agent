@@ -181,7 +181,11 @@ async def answer_call(request: Request):
     call_short = call_uuid[:8] if call_uuid else "unknown"
     logger.info(f"[TIMING] [{call_short}] 1. Call answered at {t_answer:.3f} ({datetime.now().strftime('%H:%M:%S.%f')[:-3]})")
     logger.info(f"Vobiz Answer Callback: call_uuid={call_uuid}, to={to_number}, from={from_number}")
-    active_call_meta = dialer.active_calls.get(call_uuid) or (dialer.active_call if (dialer.active_call and (not call_uuid or dialer.active_call.get("call_uuid") == call_uuid)) else {})
+    active_call_meta = (
+        dialer.link_call_uuid(call_uuid, to_number=to_number, req_uuid=params.get("req_uuid"))
+        or dialer.active_calls.get(call_uuid)
+        or (dialer.active_call if (dialer.active_call and (not call_uuid or dialer.active_call.get("call_uuid") == call_uuid)) else {})
+    )
     batch_id = params.get("batch_id") or active_call_meta.get("batch_id")
     template_id = params.get("template_id") or active_call_meta.get("template_id") or dialer.selected_template_id
     creator_id = active_call_meta.get("created_by_id")
@@ -274,7 +278,7 @@ async def hangup_webhook(request: Request):
             tracer.record_event("carrier_signaling", carrier_details)
         tracer.record_hangup(cause=hangup_cause, source=hangup_source, duration=duration)
         db.finalize_call(call_uuid, status="hung_up", batch_id=batch_id)
-        dialer.on_call_ended(call_uuid)
+        dialer.on_call_ended(call_uuid, phone_number=to_number)
     return {"status": "ok"}
 
 # Real-time WebSocket endpoint bridged to Pipecat agent
@@ -306,7 +310,7 @@ async def websocket_endpoint(websocket: WebSocket):
         tracer.record_error("websocket_error", str(exc))
         tracer.record_ws_close(1006, str(exc))
     finally:
-        dialer.on_call_ended(call_uuid)
+        dialer.on_call_ended(call_uuid, phone_number=to_number)
 
 dial_lock = asyncio.Lock()
 
@@ -363,10 +367,12 @@ async def trigger_dial(request: Request, current_user: Optional[Dict[str, Any]] 
         except Exception as exc:
             return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
-# Retrieve dialer and campaign status for UI HUD
+# Retrieve dialer and campaign status for UI HUD (scoped to current user's queue & active calls)
 @app.get("/api/campaign/status")
-async def get_campaign_status():
-    return dialer.get_status_payload()
+async def get_campaign_status(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    user_id = current_user.get("id") if current_user else None
+    user_name = current_user.get("name") if current_user else None
+    return dialer.get_status_payload(user_id=user_id, user_name=user_name)
 
 # Fetch CRM pending missed calls
 @app.get("/api/crm/pending-calls")
@@ -453,41 +459,42 @@ async def select_campaign_template(request: Request):
     dialer.set_selected_template(tpl_id)
     return {"ok": True, "selected_template_id": dialer.selected_template_id}
 
-# Start OBD automated calling
+# Start OBD automated calling for user's queue
 @app.post("/api/campaign/start")
-async def start_campaign():
-    dialer.start(get_public_url())
-    return {"ok": True, "status": dialer.status}
+async def start_campaign(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    user_id = (current_user.get("id") if current_user else None) or "default"
+    dialer.start_user(user_id, get_public_url())
+    return {"ok": True, "status": dialer.get_user_status(user_id)}
 
-# Pause OBD automated calling
+# Pause OBD automated calling for user's queue
 @app.post("/api/campaign/pause")
-async def pause_campaign():
-    dialer.pause()
-    return {"ok": True, "status": dialer.status}
+async def pause_campaign(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    user_id = (current_user.get("id") if current_user else None) or "default"
+    dialer.pause_user(user_id)
+    return {"ok": True, "status": dialer.get_user_status(user_id)}
 
-# Resume OBD automated calling
+# Resume OBD automated calling for user's queue
 @app.post("/api/campaign/resume")
-async def resume_campaign():
-    dialer.resume(get_public_url())
-    return {"ok": True, "status": dialer.status}
+async def resume_campaign(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    user_id = (current_user.get("id") if current_user else None) or "default"
+    dialer.resume_user(user_id, get_public_url())
+    return {"ok": True, "status": dialer.get_user_status(user_id)}
 
-# Stop OBD automated calling
+# Stop OBD automated calling for user's queue
 @app.post("/api/campaign/stop")
-async def stop_campaign():
-    dialer.stop()
-    return {"ok": True, "status": dialer.status}
+async def stop_campaign(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    user_id = (current_user.get("id") if current_user else None) or "default"
+    dialer.stop_user(user_id)
+    return {"ok": True, "status": dialer.get_user_status(user_id)}
 
-# Clear dialer queue
+# Clear user's pending queue
 @app.post("/api/campaign/clear")
-async def clear_campaign():
-    dialer.clear()
-    return {"ok": True, "status": dialer.status}
-
-# Reset dialer queue and counters
 @app.post("/api/campaign/reset")
-async def reset_campaign():
-    dialer.reset()
-    return {"ok": True, "status": dialer.status}
+async def reset_campaign(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    user_id = (current_user.get("id") if current_user else None) or "default"
+    user_name = current_user.get("name") if current_user else None
+    dialer.reset_user(user_id, user_name)
+    return {"ok": True, "status": "idle"}
 
 # Retrieve campaign batch list with creator attribution
 @app.get("/api/campaign/batches")

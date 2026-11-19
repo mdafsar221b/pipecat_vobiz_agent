@@ -1,4 +1,4 @@
-﻿import React, { useRef, useEffect, useState, useMemo } from 'react';
+import React, { useRef, useEffect, useState, useMemo } from 'react';
 import {
   Radio,
   Clock,
@@ -44,17 +44,23 @@ export default function LiveCallHud({
   const [inspectingCall, setInspectingCall] = useState(null);
   const [activeDrawerTab, setActiveDrawerTab] = useState('transcript');
 
-  // Multi-channel focus: resolve effective active call from parallel active calls list
+  // Multi-channel focus: resolve effective active call from parallel active calls list (filtering out completed calls)
   const effectiveCall = useMemo(() => {
-    if (activeCalls && activeCalls.length > 0) {
-      if (selectedCallUuid) {
-        const found = activeCalls.find((c) => c.call_uuid === selectedCallUuid);
-        if (found) return found;
+      const liveList = (activeCalls || []).filter(
+        (c) => c && c.status !== 'completed' && c.status !== 'hung_up' && !c.disposition
+      );
+      if (liveList.length > 0) {
+        if (selectedCallUuid) {
+          const found = liveList.find((c) => c.call_uuid === selectedCallUuid);
+          if (found) return found;
+        }
+        return liveList[0];
       }
-      return activeCalls[0];
-    }
-    return activeCall;
-  }, [activeCalls, selectedCallUuid, activeCall]);
+      if (activeCall && activeCall.status !== 'completed' && activeCall.status !== 'hung_up' && !activeCall.disposition) {
+        return activeCall;
+      }
+      return null;
+    }, [activeCalls, selectedCallUuid, activeCall]);
 
   // Auto-scroll active call transcript container
   useEffect(() => {
@@ -76,7 +82,7 @@ export default function LiveCallHud({
         audioPlayerRef.current
           .play()
           .then(() => setIsPlaying(true))
-          .catch(() => {});
+          .catch(() => { });
       }
     } else {
       setPlayingUuid(callUuid);
