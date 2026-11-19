@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import {
   Sparkles,
   Check,
@@ -11,6 +11,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { apiFetch } from '@/utils/auth';
 
 // Default prompt template used when authoring a new strategy from scratch
 const DEFAULT_NEW_PROMPT = `You are Ananya (అనన్య), an outbound telecalling AI assistant for Swargaseema Sandalwood & Open Plots.
@@ -191,7 +192,7 @@ export default function TemplatesTab({
       const url = isCreatingNew ? '/api/campaign/templates' : `/api/campaign/templates/${encodeURIComponent(targetId)}`;
       const method = isCreatingNew ? 'POST' : 'PUT';
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -230,7 +231,7 @@ export default function TemplatesTab({
 
     setIsDeleting(true);
     try {
-      const res = await fetch(`/api/campaign/templates/${encodeURIComponent(activeTplId)}`, {
+      const res = await apiFetch(`/api/campaign/templates/${encodeURIComponent(activeTplId)}`, {
         method: 'DELETE',
       });
       const data = await res.json();

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+﻿import React, { useState, useMemo } from 'react';
 import {
   ArrowLeft,
   Trash2,
@@ -31,6 +31,7 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { cn } from '@/lib/utils';
 import { Card } from './ui/card';
+import { apiFetch, getStoredUser } from '@/utils/auth';
 import {
   formatBytes,
   formatDuration,
@@ -101,6 +102,25 @@ const getCleanBatchName = (b) => {
   return name || b?.batch_id;
 };
 
+// Helper to extract or fallback batch creator / operator name
+export const getBatchCreatorName = (b) => {
+  if (b?.created_by_name && String(b.created_by_name).trim()) {
+    return String(b.created_by_name).trim();
+  }
+  if (b?.metadata?.created_by_name && String(b.metadata.created_by_name).trim()) {
+    return String(b.metadata.created_by_name).trim();
+  }
+  const name = b?.name || '';
+  const match = name.match(/-\s*([A-Za-z0-9_]+)\s*(?:\(|$)/);
+  if (match && match[1] && !/^\d+$/.test(match[1])) {
+    return match[1].trim();
+  }
+  if (isTestBatch(b)) {
+    return 'Test Runner';
+  }
+  return 'Super Admin';
+};
+
 // Campaign batches history and per-batch drilldown view with interactive KPI card filters
 export default function BatchesTab({
   batches = [],
@@ -131,10 +151,16 @@ export default function BatchesTab({
 
     setIsRerunningBatch(true);
     try {
-      const res = await fetch(`/api/campaign/batches/${encodeURIComponent(targetId)}/rerun`, {
+      const activeUser = getStoredUser();
+      const res = await apiFetch(`/api/campaign/batches/${encodeURIComponent(targetId)}/rerun`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'all' }),
+        body: JSON.stringify({
+          mode: 'all',
+          created_by_name: activeUser?.name || 'Super Admin',
+          created_by_email: activeUser?.email,
+          created_by_id: activeUser?.id,
+        }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -150,7 +176,7 @@ export default function BatchesTab({
       // Fallback: Queue directly using existing leads endpoint if running server does not have rerun route
       let callsToQueue = batchDetail?.batch?.batch_id === targetId || batchDetail?.batch_id === targetId ? batchDetail.calls : null;
       if (!callsToQueue) {
-        const detailRes = await fetch(`/api/campaign/batches/${encodeURIComponent(targetId)}`);
+        const detailRes = await apiFetch(`/api/campaign/batches/${encodeURIComponent(targetId)}`);
         if (detailRes.ok) {
           const detailData = await detailRes.json();
           callsToQueue = detailData.calls;
@@ -184,7 +210,7 @@ export default function BatchesTab({
     setBatchSearchQuery('');
 
     try {
-      const res = await fetch(`/api/campaign/batches/${encodeURIComponent(batchId)}`);
+      const res = await apiFetch(`/api/campaign/batches/${encodeURIComponent(batchId)}`);
       if (!res.ok) throw new Error('Failed to load batch detail');
       const data = await res.json();
       setBatchDetail(data);
@@ -237,7 +263,7 @@ export default function BatchesTab({
     if (!window.confirm(`Delete batch ${activeBatchId}?`)) return;
 
     try {
-      const res = await fetch(`/api/campaign/batches/${encodeURIComponent(activeBatchId)}`, {
+      const res = await apiFetch(`/api/campaign/batches/${encodeURIComponent(activeBatchId)}`, {
         method: 'DELETE',
       });
       const data = await res.json();
@@ -454,9 +480,19 @@ export default function BatchesTab({
               <h3 className="text-sm font-bold text-slate-900">
                 {isLoadingDetail ? `Loading ${activeBatchId}...` : b.name || b.batch_id}
               </h3>
-              <p className="text-xs text-slate-400">
-                Batch ID: <span className="font-mono text-slate-600">{b.batch_id}</span>
-              </p>
+              <div className="flex flex-wrap items-center gap-2 mt-1">
+                <p className="text-xs text-slate-400">
+                  Batch ID: <span className="font-mono text-slate-600">{b.batch_id}</span>
+                </p>
+                <span className="text-slate-300">•</span>
+                <Badge variant="outline" className="text-xs font-semibold px-2 py-0.5 gap-1.5 border-[#008792]/30 text-[#008792] bg-[#008792]/10">
+                  <User className="w-3.5 h-3.5 text-[#008792]" />
+                  <span>Run by: <strong>{getBatchCreatorName(b)}</strong></span>
+                </Badge>
+                {b.created_by_email && (
+                  <span className="text-[11px] text-muted-foreground font-mono">({b.created_by_email})</span>
+                )}
+              </div>
             </div>
           </div>
 
@@ -782,6 +818,7 @@ export default function BatchesTab({
             <TableRow className="bg-muted/50 hover:bg-muted/50 border-b border-border">
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Campaign Batch</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Lead Date</TableHead>
+              <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Run By</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Total Calls</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Dialed</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Status</TableHead>
@@ -793,7 +830,7 @@ export default function BatchesTab({
           <TableBody>
             {filteredBatches.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center py-14 bg-muted/20">
+                <TableCell colSpan={9} className="text-center py-14 bg-muted/20">
                   <Layers className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-50" />
                   <p className="text-xs font-semibold text-foreground">
                     {batchListSearch ? 'No batches match your search filter' : 'No campaign batches recorded yet'}
@@ -842,6 +879,14 @@ export default function BatchesTab({
                     {/* Lead Date */}
                     <TableCell className="px-2.5 py-1.5 whitespace-nowrap font-mono text-xs text-muted-foreground">
                       {getBatchLeadDate(b)}
+                    </TableCell>
+
+                    {/* Run By */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap text-xs">
+                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-teal-50 text-teal-800 border border-teal-200/60">
+                        <User className="w-3 h-3 text-[#008792]" />
+                        <span className="font-semibold">{getBatchCreatorName(b)}</span>
+                      </span>
                     </TableCell>
 
                     {/* Total Calls */}

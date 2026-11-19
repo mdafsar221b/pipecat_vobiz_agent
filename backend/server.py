@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qsl
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -59,6 +59,9 @@ if "sentencex" not in sys.modules:
 import db
 import diagnostics
 import vobiz_api
+import auth
+import email_service
+from auth import get_current_user, require_admin, get_optional_user
 from agent import run_vobiz_agent
 from dialer import dialer
 
@@ -80,6 +83,16 @@ def get_public_url() -> str:
             pass
     return os.getenv("PUBLIC_URL", "").rstrip("/")
 
+# Resolve frontend URL for email verification & reset links
+def get_frontend_url() -> str:
+    front = os.getenv("FRONTEND_URL", "").rstrip("/")
+    if front:
+        return front
+    pub = get_public_url()
+    if pub:
+        return pub
+    return f"http://localhost:3000"
+
 # XML escape text for valid Vobiz response XML
 def xml_escape(value: str) -> str:
     return escape(str(value), quote=True)
@@ -96,6 +109,7 @@ async def lifespan(app: FastAPI):
     logging.getLogger("uvicorn.access").addFilter(PollingEndpointFilter())
     logger.info("Initializing database and agent components...")
     db.get_collection()
+    auth.init_admin_user()
     logger.info(f"Pipecat Vobiz Server active at {get_public_url() or f'http://127.0.0.1:{PORT}'}")
     yield
     logger.info("Server shutting down cleanly...")
@@ -167,10 +181,22 @@ async def answer_call(request: Request):
     call_short = call_uuid[:8] if call_uuid else "unknown"
     logger.info(f"[TIMING] [{call_short}] 1. Call answered at {t_answer:.3f} ({datetime.now().strftime('%H:%M:%S.%f')[:-3]})")
     logger.info(f"Vobiz Answer Callback: call_uuid={call_uuid}, to={to_number}, from={from_number}")
-    active_call_meta = dialer.active_call if (dialer.active_call and (not call_uuid or dialer.active_call.get("call_uuid") == call_uuid)) else {}
+    active_call_meta = dialer.active_calls.get(call_uuid) or (dialer.active_call if (dialer.active_call and (not call_uuid or dialer.active_call.get("call_uuid") == call_uuid)) else {})
     batch_id = params.get("batch_id") or active_call_meta.get("batch_id")
     template_id = params.get("template_id") or active_call_meta.get("template_id") or dialer.selected_template_id
-    asyncio.create_task(asyncio.to_thread(db.record_call_start, call_uuid, phone_number=to_number, batch_id=batch_id, metadata=params))
+    creator_id = active_call_meta.get("created_by_id")
+    creator_name = active_call_meta.get("created_by_name")
+    asyncio.create_task(
+        asyncio.to_thread(
+            db.record_call_start,
+            call_uuid,
+            phone_number=to_number,
+            batch_id=batch_id,
+            metadata=params,
+            created_by_id=creator_id,
+            created_by_name=creator_name,
+        )
+    )
     dialer.set_call_status(call_uuid, "in_call")
     tracer = diagnostics.get_tracer(call_uuid, phone_number=to_number, batch_id=batch_id)
     tracer.t_answer = t_answer
@@ -284,21 +310,20 @@ async def websocket_endpoint(websocket: WebSocket):
 
 dial_lock = asyncio.Lock()
 
-# Trigger single test dial (compatible with UI dial button)
+# Trigger single test dial (compatible with multi-channel concurrent execution)
 @app.post("/api/dial")
 @app.post("/outbound")
-async def trigger_dial(request: Request):
+async def trigger_dial(request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
     payload = await parse_params(request)
     to_number = payload.get("to") or payload.get("phone_number")
     if not to_number:
         return JSONResponse(status_code=400, content={"ok": False, "error": "Missing phone number"})
 
     async with dial_lock:
-        if dialer.active_call:
-            active_num = dialer.active_call.get("phone_number", "another recipient")
+        if len(dialer.active_calls) >= dialer.max_concurrency:
             return JSONResponse(
-                status_code=409,
-                content={"ok": False, "error": f"Line busy: A call is currently active with {active_num}. Please wait for it to finish."}
+                status_code=429,
+                content={"ok": False, "error": f"All {dialer.max_concurrency} concurrent channels are currently active. Please wait for an active call to finish."}
             )
 
         public_url = get_public_url()
@@ -306,6 +331,9 @@ async def trigger_dial(request: Request):
         template_id = payload.get("template_id") or dialer.selected_template_id
         answer_url = f"{public_url}/answer?to={to_number}&template_id={template_id}"
         hangup_url = f"{public_url}/hangup"
+
+        creator_id = current_user.get("id") if current_user else None
+        creator_name = current_user.get("name") if current_user else "Manual Dial"
 
         try:
             result = await vobiz_api.place_call(
@@ -321,11 +349,15 @@ async def trigger_dial(request: Request):
                 customer_name=payload.get("customer_name", ""),
                 status="dialing",
                 template_id=template_id,
+                created_by_id=creator_id,
+                created_by_name=creator_name,
             )
             db.record_call_start(
                 call_uuid=call_uuid,
                 phone_number=to_number,
                 metadata={"customer_name": payload.get("customer_name", ""), "status": "dialing"},
+                created_by_id=creator_id,
+                created_by_name=creator_name,
             )
             return {"ok": True, "status": "call_initiated", "call_uuid": call_uuid, "vobiz_response": result}
         except Exception as exc:
@@ -346,19 +378,26 @@ async def get_crm_pending_calls(
     calls = dialer.fetch_crm_pending(start_date, end_date, status)
     return {"ok": True, "calls": calls, "total": len(calls)}
 
-# Queue selected leads into outbound campaign
+# Queue selected leads into outbound campaign with creator attribution
 @app.post("/api/campaign/leads")
-async def queue_campaign_leads(request: Request):
+async def queue_campaign_leads(request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
     payload = await request.json()
     leads = payload.get("leads", [])
     batch_name = payload.get("batch_name")
     source_filter = payload.get("source_filter")
     template_id = payload.get("template_id")
+    creator_id = (current_user.get("id") if current_user else None) or payload.get("created_by_id")
+    creator_name = (current_user.get("name") if current_user else None) or payload.get("created_by_name") or "Super Admin"
+    creator_email = (current_user.get("email") if current_user else None) or payload.get("created_by_email")
+
     batch_id = dialer.queue_leads(
         leads,
         batch_name=batch_name,
         source_filter=source_filter,
         template_id=template_id,
+        created_by_id=creator_id,
+        created_by_name=creator_name,
+        created_by_email=creator_email,
     )
     return {"ok": True, "batch_id": batch_id, "queued": len(leads)}
 
@@ -450,10 +489,11 @@ async def reset_campaign():
     dialer.reset()
     return {"ok": True, "status": dialer.status}
 
-# Retrieve campaign batch list
+# Retrieve campaign batch list with creator attribution
 @app.get("/api/campaign/batches")
-async def list_campaign_batches():
-    return {"ok": True, "batches": db.get_batches()}
+async def list_campaign_batches(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    # All active team members can view all batches and see who ran each one
+    return {"ok": True, "batches": db.get_batches(user_id=None, is_admin=True)}
 
 # Retrieve specific batch detail
 @app.get("/api/campaign/batches/{batch_id}")
@@ -463,23 +503,148 @@ async def get_batch_detail(batch_id: str):
 
 # Re-run a campaign batch
 @app.post("/api/campaign/batches/{batch_id}/rerun")
-async def rerun_campaign_batch(batch_id: str, request: Request):
+async def rerun_campaign_batch(
+    batch_id: str,
+    request: Request,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
     body = {}
     try:
         body = await request.json()
     except Exception:
         pass
     mode = body.get("mode", "all")
-    result = dialer.rerun_batch(batch_id, mode=mode)
+    creator_id = (current_user.get("id") if current_user else None) or body.get("created_by_id")
+    creator_name = (current_user.get("name") if current_user else None) or body.get("created_by_name") or "Super Admin"
+    result = dialer.rerun_batch(
+        batch_id,
+        mode=mode,
+        created_by_id=creator_id,
+        created_by_name=creator_name,
+    )
     return result
 
 # Delete a campaign batch
 @app.delete("/api/campaign/batches/{batch_id}")
 async def delete_campaign_batch(batch_id: str):
     success = db.delete_batch(batch_id)
-    if dialer.current_batch_id == batch_id:
-        dialer.reset()
+    dialer.remove_batch_from_queue(batch_id)
     return {"ok": success}
+
+# =========================================================================
+# Multi-User Authentication & Email Verification API
+# =========================================================================
+
+import uuid
+
+# User Login endpoint (Strictly authenticated against .env users - Zero DB Touches)
+@app.post("/api/auth/login")
+async def login_user(request: Request):
+    data = await request.json()
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
+    if not email or not password:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Email and password are required"})
+
+    user = auth.authenticate_user(email, password)
+    if not user:
+        return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid email or password"})
+
+    if not user.get("is_active", True):
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Account is disabled"})
+
+    token = auth.create_access_token({
+        "user_id": user.get("id"),
+        "email": user.get("email"),
+        "name": user.get("name"),
+        "role": user.get("role", "employee"),
+    })
+
+    return {
+        "ok": True,
+        "token": token,
+        "user": {
+            "id": user.get("id"),
+            "name": user.get("name"),
+            "email": user.get("email"),
+            "role": user.get("role", "employee"),
+            "phone": user.get("phone", ""),
+        },
+    }
+
+# Get current logged-in user profile
+@app.get("/api/auth/me")
+async def get_my_profile(current_user: Dict[str, Any] = Depends(get_current_user)):
+    return {
+        "ok": True,
+        "user": {
+            "id": current_user.get("id"),
+            "name": current_user.get("name"),
+            "email": current_user.get("email"),
+            "role": current_user.get("role", "employee"),
+            "phone": current_user.get("phone", ""),
+            "is_active": current_user.get("is_active", True),
+        },
+    }
+
+# List all configured users / slots (admin only) - ZERO database queries
+@app.get("/api/auth/users")
+async def list_all_users(current_user: Dict[str, Any] = Depends(require_admin)):
+    slots = auth.get_all_user_slots()
+    return JSONResponse(content={"ok": True, "users": slots})
+
+# Add employee information (Instructions for .env)
+@app.post("/api/auth/users")
+async def create_employee_user(request: Request, current_user: Dict[str, Any] = Depends(require_admin)):
+    return JSONResponse(
+        status_code=200,
+        content={
+            "ok": True,
+            "message": "User accounts are configured directly in .env (Zero DB touches). Open .env and fill USER_X_EMAIL and USER_X_PASSWORD to enable additional employees.",
+        },
+    )
+
+@app.post("/api/auth/users/{user_id}/resend-activation")
+async def resend_user_activation(user_id: str, current_user: Dict[str, Any] = Depends(require_admin)):
+    return JSONResponse(content={"ok": True, "message": "Users log in directly using credentials in .env. No email activation required."})
+
+@app.patch("/api/auth/users/{user_id}")
+async def update_user_details(user_id: str, request: Request, current_user: Dict[str, Any] = Depends(require_admin)):
+    return JSONResponse(content={"ok": True, "message": "Users are managed directly in .env."})
+
+@app.delete("/api/auth/users/{user_id}")
+async def delete_user_account(user_id: str, current_user: Dict[str, Any] = Depends(require_admin)):
+    return JSONResponse(content={"ok": True, "message": "To remove a user, clear their email & password in .env."})
+
+# Public token verification endpoint
+@app.get("/api/auth/verify-token")
+async def verify_auth_token(token: str, type: str = "activation"):
+    return JSONResponse(content={"ok": True, "message": "Direct login enabled via .env"})
+
+@app.post("/api/auth/activate")
+async def activate_employee_account(request: Request):
+    return JSONResponse(content={"ok": True, "message": "Users log in directly using credentials in .env."})
+
+@app.post("/api/auth/forgot-password")
+async def request_forgot_password(request: Request):
+    data = await request.json()
+    email = (data.get("email") or "").strip().lower()
+    user = auth.get_user_by_email(email)
+    if user:
+        return {
+            "ok": True,
+            "message": f"Your account is configured in .env under {user.get('slot', 'env')}. Please check .env or ask your administrator for the password.",
+        }
+    return {
+        "ok": True,
+        "message": "If this email is configured in .env, please consult your administrator for the password.",
+    }
+
+@app.post("/api/auth/reset-password")
+async def execute_reset_password(request: Request):
+    return JSONResponse(content={"ok": True, "message": "Passwords are managed in .env."})
+
 
 # Proxy authenticated audio recording from Vobiz
 @app.get("/api/recording/{call_uuid}")

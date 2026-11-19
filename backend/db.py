@@ -19,13 +19,41 @@ if str(BACKEND_DIR) not in sys.path:
 
 load_dotenv(BASE_DIR / ".env", override=True)
 
+def _extract_db_from_uri(uri: str) -> Optional[str]:
+    """Dynamically parse MongoDB database name from connection URI."""
+    if not uri:
+        return None
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(uri)
+        path = parsed.path.lstrip("/")
+        if path:
+            db_name = path.split("/")[0].split("?")[0].strip()
+            if db_name:
+                return db_name
+    except Exception:
+        pass
+    return None
+
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "rag-bot_test")
+MONGO_DB_NAME = (
+    os.getenv("MONGO_DB_NAME")
+    or os.getenv("MONGODB_DB")
+    or _extract_db_from_uri(MONGO_URI)
+    or "vobiz_agent_db"
+)
 MONGO_COLLECTION_NAME = os.getenv("MONGO_COLLECTION_NAME", "vobiz_ai_calls")
 MONGO_BATCHES_COLLECTION_NAME = os.getenv("MONGO_BATCHES_COLLECTION_NAME", "campaign_batches")
 MONGO_TEMPLATES_COLLECTION_NAME = os.getenv("MONGO_TEMPLATES_COLLECTION_NAME", "campaign_templates")
-REAL_MONGO_URI = os.getenv("REAL_MONGO_URI", "")
-REAL_MONGO_DB_NAME = os.getenv("REAL_MONGO_DB_NAME", "realestate_db")
+
+# CRM database configuration — always strictly loaded from .env (zero hardcoded DB names)
+REAL_MONGO_URI = os.getenv("REAL_MONGO_URI") or MONGO_URI
+REAL_MONGO_DB_NAME = (
+    os.getenv("REAL_MONGO_DB_NAME")
+    or os.getenv("CRM_MONGO_DB_NAME")
+    or _extract_db_from_uri(REAL_MONGO_URI)
+    or MONGO_DB_NAME
+)
 
 _client: Optional[MongoClient] = None
 _db: Optional[Database] = None
@@ -303,6 +331,8 @@ def record_call_start(
     phone_number: str = "",
     batch_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    created_by_id: Optional[str] = None,
+    created_by_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     col = get_collection()
     initial_doc = {
@@ -312,10 +342,12 @@ def record_call_start(
         "created_at": now_iso(),
         "start_time": time.time(),
         "disposition": "not_talking",
-        "customer_name": None,
+        "customer_name": (metadata.get("customer_name") if metadata else None),
         "callback_time": None,
         "reason": None,
         "transcripts": [],
+        "created_by_id": created_by_id or (metadata.get("created_by_id") if metadata else None),
+        "created_by_name": created_by_name or (metadata.get("created_by_name") if metadata else None),
         "metadata": metadata or {},
     }
     if col is not None:
@@ -740,13 +772,20 @@ def get_batch_metrics(batch_id: str) -> Dict[str, int]:
             logger.error(f"Failed to calculate metrics for batch {batch_id}: {exc}")
     return metrics
 
-# Retrieve all campaign batches with live metrics
-def get_batches() -> List[Dict[str, Any]]:
+# Retrieve all campaign batches with live metrics, optionally filtered by user
+def get_batches(user_id: Optional[str] = None, is_admin: bool = True) -> List[Dict[str, Any]]:
     col = get_batches_collection()
     batches: List[Dict[str, Any]] = []
     if col is not None:
         try:
-            cursor = col.find({}, {"_id": 0}).sort("created_at", DESCENDING)
+            query: Dict[str, Any] = {}
+            if not is_admin and user_id:
+                query["$or"] = [
+                    {"created_by_id": user_id},
+                    {"created_by": user_id},
+                    {"created_by_email": user_id},
+                ]
+            cursor = col.find(query, {"_id": 0}).sort("created_at", DESCENDING)
             for b in cursor:
                 bid = b.get("batch_id", "")
                 m = get_batch_metrics(bid)
@@ -835,16 +874,20 @@ def get_latest_ai_call_by_phone() -> Dict[str, Dict[str, Any]]:
         logger.error(f"Failed to query latest AI calls: {exc}")
         return {}
 
-# Initialize CRM database connection for live missed calls
+# Initialize CRM database connection for live missed calls (db name always loaded from .env)
 def get_crm_db() -> Optional[Database]:
     global _crm_client, _crm_db
     if _crm_db is not None:
         return _crm_db
     uri = REAL_MONGO_URI or MONGO_URI
-    db_name = REAL_MONGO_DB_NAME or "realestate_db"
+    db_name = REAL_MONGO_DB_NAME or MONGO_DB_NAME or _extract_db_from_uri(uri)
+    if not db_name:
+        logger.warning("No CRM DB name configured in .env, falling back to default agent DB")
+        return get_db()
     try:
         _crm_client = MongoClient(uri, serverSelectionTimeoutMS=8000)
         _crm_db = _crm_client[db_name]
+        logger.info(f"Connected to CRM database: '{db_name}' from .env")
         return _crm_db
     except Exception as exc:
         logger.error(f"CRM DB connection failed: {exc}")

@@ -1,10 +1,32 @@
-// crm_service.cjs — query missed calls / pending callbacks from realestate_db using workflow logic
+// crm_service.cjs — query missed calls / pending callbacks using workflow logic (always uses .env DB)
 const path = require('path');
 const fs = require('fs');
 
-// Auto-detect realestate server directory across known environments
+// Auto-load environment variables from project .env if present
+const envPath = path.join(__dirname, '../.env');
+if (fs.existsSync(envPath)) {
+  try {
+    const envContent = fs.readFileSync(envPath, 'utf8');
+    for (const line of envContent.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
+        const idx = trimmed.indexOf('=');
+        const key = trimmed.slice(0, idx).trim();
+        const val = trimmed.slice(idx + 1).trim().replace(/^['"]|['"]$/g, '');
+        if (!process.env[key]) {
+          process.env[key] = val;
+        }
+      }
+    }
+  } catch (err) {
+    // ignore
+  }
+}
+
+// Auto-detect server directory across known environments
 const CANDIDATE_PATHS = [
   process.env.REALESTATE_SERVER_PATH,
+  process.env.CRM_SERVER_PATH,
   'C:/KPRO/Nitesh/ai voice/realestate/server',
   'C:/KPRO/Nitesh/ai voice new project/realestate/server',
   'C:/KPRO/Nitesh/realestate4/realestate/server',
@@ -20,18 +42,24 @@ for (const p of CANDIDATE_PATHS) {
 }
 
 if (!serverPath) {
-  console.error(JSON.stringify({ error: 'Could not find realestate server directory' }));
+  console.error(JSON.stringify({ error: 'Could not find CRM server workflow directory' }));
   process.exit(1);
 }
 
 const mongoose = require(path.join(serverPath, 'node_modules/mongoose'));
 const { getInboundMissedCallsAnalytics } = require(path.join(serverPath, 'features/workflows/missedCalls.workflow.js'));
 
-const MONGO_URI = process.env.REAL_MONGO_URI || process.env.MONGO_URI || 'mongodb://mongo_admin:Realestate123%24@76.13.242.179:27017/realestate_db?authSource=admin';
+// Strictly load MongoDB URI from .env (zero hardcoded fallback)
+const MONGO_URI = process.env.REAL_MONGO_URI || process.env.MONGO_URI;
+
+if (!MONGO_URI) {
+  console.error(JSON.stringify({ error: 'No MongoDB URI configured in .env (REAL_MONGO_URI or MONGO_URI)' }));
+  process.exit(1);
+}
 
 let isConnected = false;
 
-// Connect to MongoDB realestate_db
+// Connect to MongoDB using URI from .env
 async function connect() {
   if (isConnected) return;
   await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 10000 });

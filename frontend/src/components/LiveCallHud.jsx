@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useMemo } from 'react';
+﻿import React, { useRef, useEffect, useState, useMemo } from 'react';
 import {
   Radio,
   Clock,
@@ -31,23 +31,37 @@ import { getDispositionConfig, getDiagnosticConfig, formatDuration, formatTime }
 // Live Telephony Workspace Monitor with real-time in-call HUD and shadcn slide-out details drawer
 export default function LiveCallHud({
   activeCall,
+  activeCalls = [],
   lastCompletedCall,
   completedCalls = [],
   onRefreshLogs,
 }) {
   const activeTranscriptRef = useRef(null);
   const audioPlayerRef = useRef(null);
+  const [selectedCallUuid, setSelectedCallUuid] = useState(null);
   const [playingUuid, setPlayingUuid] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [inspectingCall, setInspectingCall] = useState(null);
   const [activeDrawerTab, setActiveDrawerTab] = useState('transcript');
+
+  // Multi-channel focus: resolve effective active call from parallel active calls list
+  const effectiveCall = useMemo(() => {
+    if (activeCalls && activeCalls.length > 0) {
+      if (selectedCallUuid) {
+        const found = activeCalls.find((c) => c.call_uuid === selectedCallUuid);
+        if (found) return found;
+      }
+      return activeCalls[0];
+    }
+    return activeCall;
+  }, [activeCalls, selectedCallUuid, activeCall]);
 
   // Auto-scroll active call transcript container
   useEffect(() => {
     if (activeTranscriptRef.current) {
       activeTranscriptRef.current.scrollTop = activeTranscriptRef.current.scrollHeight;
     }
-  }, [activeCall?.turns]);
+  }, [effectiveCall?.turns]);
 
   // Audio Play / Pause handler
   const handleTogglePlay = (e, callUuid) => {
@@ -76,8 +90,8 @@ export default function LiveCallHud({
   };
 
   // Active call formatting
-  const isDialing = activeCall?.status === 'dialing';
-  const activeElapsed = activeCall?.elapsed_sec || 0;
+  const isDialing = effectiveCall?.status === 'dialing';
+  const activeElapsed = effectiveCall?.elapsed_sec || 0;
   const activeMins = String(Math.floor(activeElapsed / 60)).padStart(2, '0');
   const activeSecs = String(Math.round(activeElapsed % 60)).padStart(2, '0');
   const activeTimerStr = `${activeMins}:${activeSecs}`;
@@ -99,7 +113,7 @@ export default function LiveCallHud({
       />
 
       {/* UPPER SECTION: Live Active Call Stream HUD (or compact Last Call summary) */}
-      {activeCall ? (
+      {effectiveCall ? (
         <div className="flex flex-col shrink-0 bg-card border-b border-border overflow-hidden">
           {/* Active Call Header */}
           <div className="px-4 py-2 border-b border-border flex items-center justify-between shrink-0 bg-muted/20">
@@ -135,7 +149,7 @@ export default function LiveCallHud({
 
             <div className="flex items-center gap-2">
               <span className="text-[10px] font-mono text-muted-foreground hidden sm:inline">
-                Agent: Ananya
+                Agent: Ananya {effectiveCall.created_by ? `(${effectiveCall.created_by})` : ''}
               </span>
               <div className="flex items-center gap-1 font-mono text-xs font-bold px-2 py-0.5 bg-slate-900 text-white rounded">
                 <Clock className="w-3 h-3 text-[#008792]" />
@@ -144,20 +158,58 @@ export default function LiveCallHud({
             </div>
           </div>
 
+          {/* Multi-Channel Active Calls Selector Bar */}
+          {activeCalls && activeCalls.length > 1 && (
+            <div className="px-4 py-1.5 bg-muted/40 border-b border-border flex items-center gap-2 overflow-x-auto text-xs shrink-0">
+              <span className="text-[10px] uppercase font-bold text-muted-foreground whitespace-nowrap">
+                Parallel Channels ({activeCalls.length}/20):
+              </span>
+              <div className="flex items-center gap-1.5 overflow-x-auto">
+                {activeCalls.map((c, i) => {
+                  const isFocused = effectiveCall?.call_uuid === c.call_uuid;
+                  return (
+                    <button
+                      key={c.call_uuid || i}
+                      onClick={() => setSelectedCallUuid(c.call_uuid)}
+                      className={cn(
+                        'px-2 py-0.5 rounded text-[11px] font-mono flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer',
+                        isFocused
+                          ? 'bg-[#008792] text-white font-semibold shadow-xs'
+                          : 'bg-background border border-border text-foreground hover:bg-muted'
+                      )}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      <span>{c.customer_name || c.phone_number}</span>
+                      <span className="text-[9px] opacity-80">({c.elapsed_sec || 0}s)</span>
+                      {c.created_by && (
+                        <span className="text-[9px] opacity-70">[{c.created_by}]</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Active Recipient Details */}
           <div className="px-4 py-1.5 border-b border-border flex items-center justify-between shrink-0 bg-muted/40">
             <div className="flex items-center gap-2 truncate">
               <span className="font-mono text-sm font-bold text-foreground">
-                {activeCall.phone_number}
+                {effectiveCall.phone_number}
               </span>
-              {activeCall.customer_name && (
+              {effectiveCall.customer_name && (
                 <Badge variant="secondary" className="text-[10px] font-semibold text-[#008792]">
-                  {activeCall.customer_name}
+                  {effectiveCall.customer_name}
                 </Badge>
               )}
-              {activeCall.call_uuid && (
+              {effectiveCall.call_uuid && (
                 <span className="text-[10px] font-mono text-muted-foreground hidden sm:inline">
-                  #{String(activeCall.call_uuid).slice(0, 8)}
+                  #{String(effectiveCall.call_uuid).slice(0, 8)}
+                </span>
+              )}
+              {effectiveCall.created_by && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/10 text-purple-600 font-medium">
+                  By {effectiveCall.created_by}
                 </span>
               )}
             </div>
@@ -180,8 +232,8 @@ export default function LiveCallHud({
                   Awaiting carrier answer signal to begin voice stream
                 </span>
               </div>
-            ) : activeCall.turns && activeCall.turns.length > 0 ? (
-              activeCall.turns.map((t, idx) => {
+            ) : effectiveCall.turns && effectiveCall.turns.length > 0 ? (
+              effectiveCall.turns.map((t, idx) => {
                 const isAgent = t.role === 'agent';
                 return (
                   <div
