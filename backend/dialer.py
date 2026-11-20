@@ -75,7 +75,7 @@ class OutboundDialer:
         script_path = BACKEND_DIR / "crm_service.cjs"
         cmd = ["node", str(script_path), start_date or "", end_date or "", status or "all"]
         try:
-            res = subprocess.run(cmd, cwd=str(BACKEND_DIR), capture_output=True, text=True, timeout=25)
+            res = subprocess.run(cmd, cwd=str(BACKEND_DIR), capture_output=True, text=True, timeout=25, env=os.environ.copy())
             if res.returncode == 0 and res.stdout.strip():
                 data = json.loads(res.stdout.strip())
                 calls = data.get("calls", []) if isinstance(data, dict) else data

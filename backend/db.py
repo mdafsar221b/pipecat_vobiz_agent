@@ -19,13 +19,27 @@ if str(BACKEND_DIR) not in sys.path:
 
 load_dotenv(BASE_DIR / ".env", override=True)
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "rag-bot_test")
+# Helper to extract database name from URI if not explicitly defined
+def _extract_db_name(uri: str, explicit_db: Optional[str] = None) -> str:
+    if explicit_db and explicit_db.strip():
+        return explicit_db.strip()
+    if uri and "/" in uri:
+        try:
+            from urllib.parse import urlparse
+            p = urlparse(uri).path.lstrip("/")
+            if p:
+                return p.split("?")[0]
+        except Exception:
+            pass
+    return ""
+
+MONGO_URI = os.getenv("MONGO_URI", "")
+MONGO_DB_NAME = _extract_db_name(MONGO_URI, os.getenv("MONGO_DB_NAME"))
 MONGO_COLLECTION_NAME = os.getenv("MONGO_COLLECTION_NAME", "vobiz_ai_calls")
 MONGO_BATCHES_COLLECTION_NAME = os.getenv("MONGO_BATCHES_COLLECTION_NAME", "campaign_batches")
 MONGO_TEMPLATES_COLLECTION_NAME = os.getenv("MONGO_TEMPLATES_COLLECTION_NAME", "campaign_templates")
 REAL_MONGO_URI = os.getenv("REAL_MONGO_URI", "")
-REAL_MONGO_DB_NAME = os.getenv("REAL_MONGO_DB_NAME", "realestate_db")
+REAL_MONGO_DB_NAME = os.getenv("REAL_MONGO_DB_NAME", "")
 
 _client: Optional[MongoClient] = None
 _db: Optional[Database] = None
@@ -48,6 +62,7 @@ def get_collection() -> Optional[Collection]:
         _collection.create_index([("phone_number", ASCENDING)])
         _collection.create_index([("batch_id", ASCENDING)])
         _collection.create_index([("created_at", DESCENDING)])
+        logger.info(f"MongoDB initialized with database: '{MONGO_DB_NAME}' (collection: '{MONGO_COLLECTION_NAME}')")
         return _collection
     except Exception as exc:
         logger.error(f"MongoDB connection failed: {exc}")
@@ -841,10 +856,20 @@ def get_crm_db() -> Optional[Database]:
     if _crm_db is not None:
         return _crm_db
     uri = REAL_MONGO_URI or MONGO_URI
-    db_name = REAL_MONGO_DB_NAME or "realestate_db"
+    db_name = REAL_MONGO_DB_NAME or MONGO_DB_NAME or _extract_db_name(uri)
+    if not uri or not db_name:
+        return get_db()
+
+    # If CRM DB matches the primary DB, reuse existing connection
+    main_db = get_db()
+    if main_db is not None and main_db.name == db_name:
+        _crm_db = main_db
+        return _crm_db
+
     try:
         _crm_client = MongoClient(uri, serverSelectionTimeoutMS=8000)
         _crm_db = _crm_client[db_name]
+        logger.info(f"Connected to CRM database: {db_name}")
         return _crm_db
     except Exception as exc:
         logger.error(f"CRM DB connection failed: {exc}")
@@ -988,8 +1013,13 @@ def fetch_crm_missed_calls(
     if db_inst is None:
         return []
     try:
-        if "telephony_calls" in db_inst.list_collection_names():
+        col_names = db_inst.list_collection_names()
+        if "telephony_calls" in col_names:
             return fetch_crm_from_telephony_calls(db_inst, start_date, end_date, status_filter)
+
+        if "hook_v2_inbound_hangup_missed" not in col_names:
+            logger.info(f"Neither telephony_calls nor hook_v2_inbound_hangup_missed found in database '{db_inst.name}'. Returning empty list.")
+            return []
 
         ist_offset = timedelta(hours=5, minutes=30)
         now_utc = datetime.now(timezone.utc)

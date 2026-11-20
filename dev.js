@@ -20,26 +20,42 @@ function getPythonExecutable() {
   return process.platform === 'win32' ? 'python' : 'python3';
 }
 
+// Detect backend port from .env or environment
+function getBackendPort() {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    const envContent = fs.readFileSync(envPath, 'utf8');
+    const portMatch = envContent.match(/^PORT\s*=\s*(\d+)/m) || envContent.match(/^HTTP_PORT\s*=\s*(\d+)/m);
+    if (portMatch) return parseInt(portMatch[1], 10);
+  }
+  return parseInt(process.env.PORT || process.env.HTTP_PORT || '8000', 10);
+}
+
 // Update PUBLIC_URL in .env file with active tunnel URL
 function updateEnvPublicUrl(url) {
   const envPath = path.join(__dirname, '.env');
-  if (fs.existsSync(envPath)) {
-    let envContent = fs.readFileSync(envPath, 'utf8');
-    if (envContent.includes('PUBLIC_URL=')) {
-      envContent = envContent.replace(/^PUBLIC_URL=.*$/m, `PUBLIC_URL=${url}`);
-    } else {
-      envContent += `\nPUBLIC_URL=${url}\n`;
+  try {
+    if (fs.existsSync(envPath)) {
+      let envContent = fs.readFileSync(envPath, 'utf8');
+      if (envContent.includes('PUBLIC_URL=')) {
+        envContent = envContent.replace(/^PUBLIC_URL=.*$/m, `PUBLIC_URL=${url}`);
+      } else {
+        envContent += `\nPUBLIC_URL=${url}\n`;
+      }
+      fs.writeFileSync(envPath, envContent, 'utf8');
+      console.log(`  Updated PUBLIC_URL: ${url}`);
     }
-    fs.writeFileSync(envPath, envContent, 'utf8');
-    console.log(`  Updated PUBLIC_URL: ${url}`);
+  } catch (err) {
+    console.warn(`  Warning: Could not auto-update .env with PUBLIC_URL (${err.message})`);
   }
 }
 
 const pythonExe = getPythonExecutable();
+const backendPort = getBackendPort();
 console.log('='.repeat(60));
 console.log('  Starting Pipecat Vobiz Voice AI Suite');
 console.log(`  Backend Python:  ${pythonExe}`);
-console.log('  Backend Server:  http://127.0.0.1:8000');
+console.log(`  Backend Server:  http://127.0.0.1:${backendPort}`);
 console.log('  Frontend Vite:   http://localhost:5173');
 console.log('='.repeat(60));
 
@@ -85,7 +101,7 @@ async function main() {
       }
     }
 
-    tunnelProcess = spawn(cloudflaredExe, ['tunnel', '--url', 'http://127.0.0.1:8000'], {
+    tunnelProcess = spawn(cloudflaredExe, ['tunnel', '--url', `http://127.0.0.1:${backendPort}`], {
       cwd: __dirname,
       shell: false,
     });

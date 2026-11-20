@@ -1,8 +1,29 @@
-// crm_service.cjs — query missed calls / pending callbacks from realestate_db using workflow logic
+// crm_service.cjs — query missed calls / pending callbacks using workflow logic
 const path = require('path');
 const fs = require('fs');
 
-// Auto-detect realestate server directory across known environments
+// Load environment variables from .env if not already loaded
+const envPath = path.resolve(__dirname, '..', '.env');
+if (fs.existsSync(envPath)) {
+  try {
+    const envContent = fs.readFileSync(envPath, 'utf8');
+    for (const line of envContent.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
+        const idx = trimmed.indexOf('=');
+        const key = trimmed.slice(0, idx).trim();
+        const val = trimmed.slice(idx + 1).trim();
+        if (!process.env[key]) {
+          process.env[key] = val.replace(/^["']|["']$/g, '');
+        }
+      }
+    }
+  } catch {
+    // Ignore .env read error
+  }
+}
+
+// Auto-detect realestate server directory across known environments if available
 const CANDIDATE_PATHS = [
   process.env.REALESTATE_SERVER_PATH,
   'C:/KPRO/Nitesh/ai voice/realestate/server',
@@ -19,27 +40,41 @@ for (const p of CANDIDATE_PATHS) {
   }
 }
 
-if (!serverPath) {
-  console.error(JSON.stringify({ error: 'Could not find realestate server directory' }));
-  process.exit(1);
-}
-
-const mongoose = require(path.join(serverPath, 'node_modules/mongoose'));
-const { getInboundMissedCallsAnalytics } = require(path.join(serverPath, 'features/workflows/missedCalls.workflow.js'));
-
-const MONGO_URI = process.env.REAL_MONGO_URI || process.env.MONGO_URI || 'mongodb://mongo_admin:Realestate123%24@76.13.242.179:27017/realestate_db?authSource=admin';
+const MONGO_URI = process.env.REAL_MONGO_URI || process.env.MONGO_URI;
 
 let isConnected = false;
+let mongoose = null;
+let getInboundMissedCallsAnalytics = null;
 
-// Connect to MongoDB realestate_db
+if (serverPath) {
+  try {
+    mongoose = require(path.join(serverPath, 'node_modules/mongoose'));
+    getInboundMissedCallsAnalytics = require(path.join(serverPath, 'features/workflows/missedCalls.workflow.js')).getInboundMissedCallsAnalytics;
+  } catch (loadErr) {
+    // Workflow or mongoose not loaded
+  }
+}
+
+// Connect to MongoDB
 async function connect() {
-  if (isConnected) return;
-  await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 10000 });
+  if (isConnected || !mongoose || !MONGO_URI) return;
+  await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 8000 });
   isConnected = true;
 }
 
 // Fetch missed calls / pending callbacks from CRM workflow
 async function fetchPendingCalls(startDate, endDate, statusFilter = 'pending') {
+  if (!serverPath || !mongoose || !getInboundMissedCallsAnalytics || !MONGO_URI) {
+    return {
+      kpis: {},
+      calls: [],
+      uniqueCalls: [],
+      total: 0,
+      uniqueTotal: 0,
+      totalReported: 0,
+    };
+  }
+
   await connect();
 
   const isAll = statusFilter === 'all';
@@ -71,7 +106,6 @@ async function fetchPendingCalls(startDate, endDate, statusFilter = 'pending') {
   let totalReported = 0;
   let lastKpis = {};
 
-  // Loop through all pages because CRM workflow clamps limit to 100 per page
   while (true) {
     query.page = page;
     const res = await getInboundMissedCallsAnalytics(null, query);
@@ -135,8 +169,9 @@ if (require.main === module) {
     console.log(JSON.stringify(data));
     process.exit(0);
   }).catch(err => {
-    console.error(err);
-    process.exit(1);
+    // Always output valid JSON on error so callers never receive unexpected EOF
+    console.log(JSON.stringify({ kpis: {}, calls: [], uniqueCalls: [], total: 0, uniqueTotal: 0, totalReported: 0, error: err.message }));
+    process.exit(0);
   });
 }
 
