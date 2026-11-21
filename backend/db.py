@@ -709,6 +709,22 @@ def save_batch(batch_doc: Dict[str, Any]) -> None:
         except Exception as exc:
             logger.error(f"Failed to save batch {batch_doc.get('batch_id')}: {exc}")
 
+# Append additional leads to an existing active batch document
+def append_leads_to_batch(batch_id: str, new_leads: List[Dict[str, Any]]) -> None:
+    col = get_batches_collection()
+    if col is not None:
+        try:
+            col.update_one(
+                {"batch_id": batch_id},
+                {
+                    "$push": {"leads": {"$each": new_leads}},
+                    "$inc": {"total_leads": len(new_leads)},
+                    "$set": {"updated_at": now_iso()},
+                },
+            )
+        except Exception as exc:
+            logger.error(f"Failed to append leads to batch {batch_id}: {exc}")
+
 # Finalize a campaign batch
 def finalize_batch(batch_id: str, status: str = "completed") -> None:
     col = get_batches_collection()

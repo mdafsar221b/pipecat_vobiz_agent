@@ -347,6 +347,20 @@ export default function App() {
     }
   };
 
+  const handleAddCrmCalls = (newCalls = []) => {
+    if (!newCalls.length) return;
+    setCrmCalls((prev) => {
+      const existingPhones = new Set(
+        prev.map((c) => String(c.phone_number || '').replace(/\D/g, '').slice(-10))
+      );
+      const uniqueNew = newCalls.filter((c) => {
+        const num10 = String(c.phone_number || '').replace(/\D/g, '').slice(-10);
+        return !num10 || !existingPhones.has(num10);
+      });
+      return [...uniqueNew, ...prev];
+    });
+  };
+
   const activeCall = campaignData.active_calls?.[0] || null;
 
   return (
@@ -450,6 +464,7 @@ export default function App() {
                 <ErrorBoundary onReset={fetchCrmPendingCalls}>
                   <PendingCallsTab
                     crmCalls={crmCalls}
+                    campaignData={campaignData}
                     templates={templates}
                     selectedTemplateId={selectedTemplateId}
                     onSelectTemplate={handleSelectTemplate}
@@ -457,6 +472,7 @@ export default function App() {
                     crmError={crmError}
                     onFetchCrmCalls={fetchCrmPendingCalls}
                     onQueueLeads={handleQueueLeads}
+                    onImportCrmCalls={handleAddCrmCalls}
                     onTriggerManualDial={handleTriggerManualDial}
                     isDialingManual={isDialingManual}
                     completedCalls={completedCalls}
@@ -473,10 +489,13 @@ export default function App() {
                 <ErrorBoundary onReset={fetchBatches}>
                   <BatchesTab
                     batches={batches}
+                    campaignData={campaignData}
                     isLoadingBatches={isLoadingBatches}
                     onRefreshBatches={fetchBatches}
                     onRefreshCampaign={fetchCampaignStatus}
                     onQueueLeads={handleQueueLeads}
+                    templates={templates}
+                    selectedTemplateId={selectedTemplateId}
                   />
                 </ErrorBoundary>
               </div>

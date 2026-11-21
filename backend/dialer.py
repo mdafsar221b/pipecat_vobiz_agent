@@ -92,7 +92,31 @@ class OutboundDialer:
         batch_name: Optional[str] = None,
         source_filter: Optional[str] = None,
         template_id: Optional[str] = None,
+        append: bool = False,
     ) -> str:
+        # If append requested and there is an active running batch, append without clearing queue
+        if append and self.current_batch_id:
+            batch_id = self.current_batch_id
+            added_count = 0
+            for lead in leads:
+                entry = {
+                    "id": lead.get("id") or str(time.time()),
+                    "phone_number": lead.get("phone_number") or lead.get("customerNumber"),
+                    "customer_name": lead.get("customer_name") or lead.get("customerName", ""),
+                    "source": lead.get("source") or lead.get("marketing_source", ""),
+                    "batch_id": batch_id,
+                    "status": "pending",
+                    "queued_at": time.time(),
+                }
+                if entry["phone_number"]:
+                    self.queue.append(entry)
+                    added_count += 1
+
+            db.append_leads_to_batch(batch_id, [dict(l) for l in leads])
+            self.total_batch_leads += added_count
+            logger.info(f"Appended {added_count} leads to running batch {batch_id} without stopping queue")
+            return batch_id
+
         batch_id = f"BATCH-{datetime_now_str()}"
         self.current_batch_id = batch_id
         self.queue.clear()

@@ -17,6 +17,8 @@ import {
   Phone,
   PhoneCall,
   ThumbsUp,
+  FileSpreadsheet,
+  Upload,
 } from 'lucide-react';
 import {
   Table,
@@ -38,6 +40,8 @@ import {
   getDispositionConfig,
   getDiagnosticConfig,
 } from '../utils/formatters';
+import { exportToExcel } from '../utils/excelUtils';
+import ExcelImportModal from './ExcelImportModal';
 
 // Helper to format batch launch timestamps safely
 const formatLaunchTimestamp = (b) => {
@@ -77,7 +81,7 @@ const getBatchLeadDate = (b) => {
 };
 
 // Helper to identify test batches created from predefined test contacts
-export const isTestBatch = (b) => {
+const isTestBatch = (b) => {
   const name = String(b?.name || '').toLowerCase();
   const source = String(b?.source_filter || '').toLowerCase();
   return (
@@ -104,10 +108,13 @@ const getCleanBatchName = (b) => {
 // Campaign batches history and per-batch drilldown view with interactive KPI card filters
 export default function BatchesTab({
   batches = [],
+  campaignData = {},
   isLoadingBatches = false,
   onRefreshBatches,
   onRefreshCampaign,
   onQueueLeads,
+  templates = [],
+  selectedTemplateId = 'production_callback_conversion',
 }) {
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [batchDetail, setBatchDetail] = useState(null);
@@ -122,6 +129,90 @@ export default function BatchesTab({
   const [selectedBatchUuids, setSelectedBatchUuids] = useState(new Set());
   const [isQueueingBatchCalls, setIsQueueingBatchCalls] = useState(false);
   const [isRerunningBatch, setIsRerunningBatch] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+
+  // Export summary of production campaign batches to Excel
+  const handleExportBatchesExcel = () => {
+    const listToExport = filteredBatches.length > 0 ? filteredBatches : productionBatches;
+    if (!listToExport || listToExport.length === 0) {
+      alert('No campaign batches available to export.');
+      return;
+    }
+
+    const data = listToExport.map((b, idx) => {
+      const m = b.metrics || {};
+      const totalLeads = b.total_leads || 0;
+      const dialed = m.dialed || 0;
+      const interested = m.interested || 0;
+      const notInterested = (m.declined || 0) + (m.not_interested || 0);
+      const noAnswer = (m.no_answer || 0) + (m.busy || 0);
+      const notTalking = m.not_talking || 0;
+      const wrongNumber = m.wrong_number || 0;
+      const dropped = m.dropped || 0;
+      const dialedRate = totalLeads > 0 ? `${Math.round((dialed / totalLeads) * 100)}%` : '0%';
+      const conversionRate = dialed > 0 ? `${Math.round((interested / dialed) * 100)}%` : '0%';
+
+      return {
+        'S.No': idx + 1,
+        'Campaign Batch Name': getCleanBatchName(b),
+        'Batch ID': b.batch_id || '',
+        'Lead Date': getBatchLeadDate(b),
+        'Status': (b.status || 'active').toUpperCase(),
+        'Launch Date': formatLaunchTimestamp(b),
+        'Total Calls': totalLeads,
+        'Dialed Calls': dialed,
+        'Dialed Rate': dialedRate,
+        'Interested': interested,
+        'Not Interested': notInterested,
+        'No Answer / Busy': noAnswer,
+        'Silent / Not Talking': notTalking,
+        'Wrong Number': wrongNumber,
+        'Dropped': dropped,
+        'Conversion Rate': conversionRate,
+        'Source / Filter': b.source_filter || '',
+      };
+    });
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    exportToExcel(data, `Campaign_Batches_Summary_${dateStr}`, 'Campaign Batches');
+  };
+
+  // Export calls from active batch to Excel
+  const handleExportBatchCallsExcel = () => {
+    const calls = batchDetail?.calls || [];
+    const callsToExport =
+      selectedBatchUuids.size > 0 && selectedBatchUuids.size < filteredBatchCalls.length
+        ? filteredBatchCalls.filter((c) => selectedBatchUuids.has(c.call_uuid))
+        : filteredBatchCalls;
+
+    if (!callsToExport || callsToExport.length === 0) {
+      alert('No calls in this batch to export.');
+      return;
+    }
+
+    const b = batchDetail?.batch || {};
+    const data = callsToExport.map((c, idx) => {
+      const disp = c.disposition || 'completed';
+      const duration = c.duration || 0;
+      const startTime = c.started || c.created_at || '';
+      return {
+        'S.No': idx + 1,
+        'Phone Number': c.phone_number || (c.events || []).find((e) => e.to || e.params?.To)?.to || '',
+        'Customer Name': c.customer_name || c.contact_name || 'Customer',
+        'Call Status': (c.status || '').toUpperCase(),
+        'AI Disposition': disp.replace(/_/g, ' ').toUpperCase(),
+        'Duration (s)': Math.round(duration),
+        'Call Time': startTime ? new Date(startTime).toLocaleString() : '--',
+        'Diagnostic Root Cause': c.diagnostic?.root_cause_summary || '--',
+        'Reason / Notes': c.reason || '--',
+        'Call UUID': c.call_uuid || '',
+        'Batch ID': b.batch_id || activeBatchId,
+      };
+    });
+
+    const batchNameClean = (b.name || activeBatchId).replace(/[^\w-]/g, '_');
+    exportToExcel(data, `Batch_${batchNameClean}_Calls`, 'Batch Calls');
+  };
 
   const handleRerunBatch = async (batchIdToRerun, batchNameToRerun) => {
     const targetId = batchIdToRerun || activeBatchId;
@@ -275,8 +366,10 @@ export default function BatchesTab({
         if (batchKpiFilter === 'declined') return disp === 'not_interested' || disp === 'declined';
         if (batchKpiFilter === 'wrong') return disp === 'wrong_number';
         if (batchKpiFilter === 'silent') return disp === 'not_talking';
-        if (batchKpiFilter === 'no_answer') return disp === 'no_answer' || disp === 'busy';
+        if (batchKpiFilter === 'no_answer') return disp === 'no_answer' || disp === 'busy' || disp === 'na';
         if (batchKpiFilter === 'dropped') return disp === 'dropped';
+        if (batchKpiFilter === 'whatsup') return disp === 'whatsup' || disp === 'whatsapp';
+        if (batchKpiFilter === 'jad') return disp === 'jad';
         return true;
       });
     }
@@ -456,21 +549,48 @@ export default function BatchesTab({
               </h3>
               <p className="text-xs text-slate-400">
                 Batch ID: <span className="font-mono text-slate-600">{b.batch_id}</span>
+                {b.created_by && (
+                  <span className="ml-2 pl-2 border-l border-slate-200">
+                    Created by: <span className="font-medium text-slate-700">{b.created_by}</span>
+                  </span>
+                )}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <span
-              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider border ${
-                isCompleted
-                  ? 'bg-slate-100 text-slate-600 border-slate-200'
-                  : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-              }`}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider border ${isCompleted
+                ? 'bg-slate-100 text-slate-600 border-slate-200'
+                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                }`}
             >
               <span className={`w-1.5 h-1.5 ${isCompleted ? 'bg-slate-400' : 'bg-emerald-500 animate-pulse'}`} />
               {(b.status || 'ACTIVE').toUpperCase()}
             </span>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={handleExportBatchCallsExcel}
+              disabled={filteredBatchCalls.length === 0}
+              className="h-7 px-2 gap-1.5 text-xs font-medium border-slate-200 text-slate-700 hover:bg-slate-50 cursor-pointer"
+              title="Export calls in this batch to Excel (.xlsx)"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+              <span>
+                Export Calls{selectedBatchCalls.length > 0 && selectedBatchCalls.length < filteredBatchCalls.length ? ` (${selectedBatchCalls.length})` : ''}
+              </span>
+            </Button>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => setIsImportModalOpen(true)}
+              className="h-7 px-2 gap-1.5 text-xs font-medium border-slate-200 text-[#008792] hover:bg-[#008792]/5 cursor-pointer"
+              title="Import leads from Excel spreadsheet"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Import Leads</span>
+            </Button>
             {selectedBatchCalls.length > 0 && (
               <Button
                 size="xs"
@@ -521,7 +641,7 @@ export default function BatchesTab({
             )}
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-1.5">
+          <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-1.5">
             {/* Total Card */}
             <Card
               onClick={() => handleKpiCardClick('all')}
@@ -568,6 +688,38 @@ export default function BatchesTab({
                 {m.interested || 0}
               </span>
               <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">Interested</span>
+            </Card>
+
+            {/* WhatsApp Card */}
+            <Card
+              onClick={() => handleKpiCardClick('whatsup')}
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
+                batchKpiFilter === 'whatsup'
+                  ? 'bg-emerald-700 text-white border-emerald-700'
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
+            >
+              <span className={cn('block text-sm font-bold font-mono leading-none mb-0.5', batchKpiFilter === 'whatsup' ? 'text-white' : 'text-emerald-700')}>
+                {m.whatsup || 0}
+              </span>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">WhatsApp</span>
+            </Card>
+
+            {/* JAD Card */}
+            <Card
+              onClick={() => handleKpiCardClick('jad')}
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
+                batchKpiFilter === 'jad'
+                  ? 'bg-sky-600 text-white border-sky-600'
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
+            >
+              <span className={cn('block text-sm font-bold font-mono leading-none mb-0.5', batchKpiFilter === 'jad' ? 'text-white' : 'text-sky-600')}>
+                {m.jad || 0}
+              </span>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">JAD</span>
             </Card>
 
             {/* Not Interested Card */}
@@ -665,6 +817,22 @@ export default function BatchesTab({
           onCallUpdated={handleCallUpdated}
           containerClassName="max-h-[calc(100vh-220px)]"
         />
+
+        {/* Reusable Excel Lead Import Modal */}
+        <ExcelImportModal
+          isOpen={isImportModalOpen}
+          onClose={() => setIsImportModalOpen(false)}
+          mode="batch"
+          campaignData={campaignData}
+          templates={templates}
+          selectedTemplateId={selectedTemplateId}
+          currentBatchId={activeBatchId}
+          onQueueLeads={async (payload) => {
+            await onQueueLeads?.(payload);
+            onRefreshBatches?.();
+            onRefreshCampaign?.();
+          }}
+        />
       </div>
     );
   }
@@ -679,14 +847,40 @@ export default function BatchesTab({
             Performance breakdown, lead progression, and recordings for launched batches
           </p>
         </div>
-        <button
-          onClick={onRefreshBatches}
-          disabled={isLoadingBatches}
-          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition self-start sm:self-auto disabled:opacity-40"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isLoadingBatches ? 'animate-spin text-[#008792]' : ''}`} />
-          <span>{isLoadingBatches ? 'Refreshing...' : 'Refresh Batches'}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleExportBatchesExcel}
+            disabled={productionBatches.length === 0}
+            className="h-8 px-2.5 gap-1.5 text-xs font-medium cursor-pointer"
+            title="Export all campaign batches summary to Excel (.xlsx)"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Export Batches</span>
+          </Button>
+
+          <Button
+            size="sm"
+            onClick={() => setIsImportModalOpen(true)}
+            className="h-8 px-2.5 gap-1.5 text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white cursor-pointer"
+            title="Import leads from Excel spreadsheet to create a new campaign batch"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>Import Excel Batch</span>
+          </Button>
+
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onRefreshBatches}
+            disabled={isLoadingBatches}
+            className="h-8 px-2.5 gap-1.5 text-xs font-medium cursor-pointer disabled:opacity-40"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingBatches ? 'animate-spin text-[#008792]' : ''}`} />
+            <span>{isLoadingBatches ? 'Refreshing...' : 'Refresh'}</span>
+          </Button>
+        </div>
       </div>
 
       {/* High-Level Overview KPI Cards */}
@@ -781,6 +975,7 @@ export default function BatchesTab({
           <TableHeader>
             <TableRow className="bg-muted/50 hover:bg-muted/50 border-b border-border">
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Campaign Batch</TableHead>
+              <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Created By</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Lead Date</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Total Calls</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Dialed</TableHead>
@@ -793,7 +988,7 @@ export default function BatchesTab({
           <TableBody>
             {filteredBatches.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center py-14 bg-muted/20">
+                <TableCell colSpan={9} className="text-center py-14 bg-muted/20">
                   <Layers className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-50" />
                   <p className="text-xs font-semibold text-foreground">
                     {batchListSearch ? 'No batches match your search filter' : 'No campaign batches recorded yet'}
@@ -836,6 +1031,17 @@ export default function BatchesTab({
                         title={`Batch ID: ${b.batch_id}`}
                       >
                         {getCleanBatchName(b)}
+                      </span>
+                    </TableCell>
+
+                    {/* Created By */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
+                      <span
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground border border-border/40"
+                        title={b.created_by || 'system'}
+                      >
+                        <User className="size-2.5 text-muted-foreground shrink-0" />
+                        <span className="max-w-[120px] truncate">{b.created_by ? b.created_by.split('@')[0] : 'System'}</span>
                       </span>
                     </TableCell>
 
@@ -882,6 +1088,16 @@ export default function BatchesTab({
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-50 text-emerald-700 border border-emerald-500/20" title="Interested">
                           Int: {m.interested || 0}
                         </span>
+                        {m.whatsup > 0 && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-100/60 text-emerald-800 border border-emerald-500/30" title="WhatsApp">
+                            WA: {m.whatsup}
+                          </span>
+                        )}
+                        {m.jad > 0 && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-sky-50 text-sky-700 border border-sky-500/20" title="JAD">
+                            JAD: {m.jad}
+                          </span>
+                        )}
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-rose-50 text-rose-700 border border-rose-500/20" title="Not Interested">
                           Decl: {m.not_interested || 0}
                         </span>
@@ -932,6 +1148,21 @@ export default function BatchesTab({
           </TableBody>
         </Table>
       </div>
+
+      {/* Reusable Excel Lead Import Modal */}
+      <ExcelImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        mode="batch"
+        campaignData={campaignData}
+        templates={templates}
+        selectedTemplateId={selectedTemplateId}
+        onQueueLeads={async (payload) => {
+          await onQueueLeads?.(payload);
+          onRefreshBatches?.();
+          onRefreshCampaign?.();
+        }}
+      />
     </div>
   );
 }

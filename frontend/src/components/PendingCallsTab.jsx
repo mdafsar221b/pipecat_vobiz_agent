@@ -6,6 +6,8 @@ import {
   Database,
   RefreshCw,
   X,
+  FileSpreadsheet,
+  Upload,
 } from 'lucide-react';
 import {
   Table,
@@ -22,11 +24,14 @@ import { Separator } from './ui/separator';
 import { DateRangePicker } from './ui/date-range-picker';
 import { StatusFacetedFilter } from './ui/faceted-filter';
 import { cn } from '@/lib/utils';
+import { exportToExcel } from '../utils/excelUtils';
+import ExcelImportModal from './ExcelImportModal';
 
 // Pending missed calls list from CRM with AI disposition tracking and dialer queue actions
 export default function PendingCallsTab({
   crmCalls = [],
   completedCalls = [],
+  campaignData = {},
   templates = [],
   selectedTemplateId = 'production_callback_conversion',
   onSelectTemplate,
@@ -34,6 +39,7 @@ export default function PendingCallsTab({
   crmError = '',
   onFetchCrmCalls,
   onQueueLeads,
+  onImportCrmCalls,
   onTriggerManualDial,
   isDialingManual = false,
   searchText: externalSearchText,
@@ -51,6 +57,7 @@ export default function PendingCallsTab({
   const [statusFilter, setStatusFilter] = useState('all');
   const [deselectedPhones, setDeselectedPhones] = useState(new Set());
   const [isQueueing, setIsQueueing] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [rangeFrom, setRangeFrom] = useState('');
   const [rangeTo, setRangeTo] = useState('');
   const selectAllRef = React.useRef(null);
@@ -300,6 +307,41 @@ export default function PendingCallsTab({
     }
   };
 
+  // Export currently filtered or selected CRM calls to Excel
+  const handleExportExcel = () => {
+    const listToExport =
+      selectedCalls.length > 0 && selectedCalls.length < filteredCalls.length
+        ? selectedCalls
+        : filteredCalls;
+
+    if (!listToExport || listToExport.length === 0) {
+      alert('No calls available to export.');
+      return;
+    }
+
+    const data = listToExport.map((c, idx) => {
+      const info = getAiCallInfo(c);
+      const aiDisp = info?.disposition ? info.disposition.replace(/_/g, ' ').toUpperCase() : '--';
+      const durationSec = info?.duration ? Math.round(info.duration) : 0;
+      return {
+        'S.No': idx + 1,
+        'Call Time / Date': c.call_time || c.created_at || '--',
+        'Customer Name': c.customer_name || 'Customer',
+        'Phone Number': c.phone_number || '',
+        'CRM Status': (c.status || 'pending').toUpperCase(),
+        'Source': c.source || 'CRM Missed Call',
+        'CRM Disposition': c.crm_disposition || '--',
+        'Callback Agent': c.crm_callback_agent || '--',
+        'AI Disposition': aiDisp,
+        'Duration (s)': durationSec,
+        'Call UUID': info?.call_uuid || c.ai_call_uuid || '--',
+      };
+    });
+
+    const dateStr = startDate === endDate ? startDate : `${startDate}_to_${endDate}`;
+    exportToExcel(data, `CRM_Missed_Calls_${dateStr}`, 'CRM Missed Calls');
+  };
+
   // Render high-contrast clean slate AI disposition badge
   const renderAiBadge = (c) => {
     const info = getAiCallInfo(c);
@@ -405,8 +447,37 @@ export default function PendingCallsTab({
             )}
           </div>
 
-          {/* Right: Script & Queue Action */}
-          <div className="flex items-center gap-2">
+          {/* Right: Excel Import/Export, Script & Queue Action */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setIsImportModalOpen(true)}
+              className="h-8 px-2.5 gap-1.5 text-xs font-medium cursor-pointer"
+              title="Import leads from Excel (.xlsx, .xls) or CSV"
+            >
+              <Upload className="w-3.5 h-3.5 text-[#008792]" />
+              <span className="hidden sm:inline">Import Excel</span>
+              <span className="sm:hidden">Import</span>
+            </Button>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleExportExcel}
+              disabled={filteredCalls.length === 0}
+              className="h-8 px-2.5 gap-1.5 text-xs font-medium cursor-pointer"
+              title={`Export ${selectedCalls.length > 0 && selectedCalls.length < filteredCalls.length ? `${selectedCalls.length} selected` : `${filteredCalls.length} filtered`} calls to Excel (.xlsx)`}
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="hidden sm:inline">
+                Export Excel{selectedCalls.length > 0 && selectedCalls.length < filteredCalls.length ? ` (${selectedCalls.length})` : ''}
+              </span>
+              <span className="sm:hidden">Export</span>
+            </Button>
+
+            <Separator orientation="vertical" className="h-4 hidden sm:block" />
+
             <div className="flex items-center gap-1.5 text-xs">
               <span className="text-muted-foreground text-xs hidden sm:inline">Script:</span>
               <select
@@ -682,6 +753,18 @@ export default function PendingCallsTab({
           <span>MongoDB CRM: <strong className="font-mono text-foreground">telephony_calls</strong></span>
         </div>
       </div>
+
+      {/* Reusable Excel Lead Import Modal */}
+      <ExcelImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        mode="crm"
+        campaignData={campaignData}
+        templates={templates}
+        selectedTemplateId={selectedTemplateId}
+        onImportToCrm={onImportCrmCalls}
+        onQueueLeads={onQueueLeads}
+      />
     </div>
   );
 }

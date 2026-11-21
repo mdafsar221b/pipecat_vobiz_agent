@@ -354,13 +354,15 @@ async def queue_campaign_leads(request: Request):
     batch_name = payload.get("batch_name")
     source_filter = payload.get("source_filter")
     template_id = payload.get("template_id")
+    append = payload.get("append", False)
     batch_id = dialer.queue_leads(
         leads,
         batch_name=batch_name,
         source_filter=source_filter,
         template_id=template_id,
+        append=append,
     )
-    return {"ok": True, "batch_id": batch_id, "queued": len(leads)}
+    return {"ok": True, "batch_id": batch_id, "queued": len(leads), "appended": bool(append)}
 
 # List all campaign templates
 @app.get("/api/campaign/templates")
