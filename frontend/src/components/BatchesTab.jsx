@@ -77,7 +77,7 @@ const getBatchLeadDate = (b) => {
 };
 
 // Helper to identify test batches created from predefined test contacts
-export const isTestBatch = (b) => {
+const isTestBatch = (b) => {
   const name = String(b?.name || '').toLowerCase();
   const source = String(b?.source_filter || '').toLowerCase();
   return (
@@ -275,8 +275,10 @@ export default function BatchesTab({
         if (batchKpiFilter === 'declined') return disp === 'not_interested' || disp === 'declined';
         if (batchKpiFilter === 'wrong') return disp === 'wrong_number';
         if (batchKpiFilter === 'silent') return disp === 'not_talking';
-        if (batchKpiFilter === 'no_answer') return disp === 'no_answer' || disp === 'busy';
+        if (batchKpiFilter === 'no_answer') return disp === 'no_answer' || disp === 'busy' || disp === 'na';
         if (batchKpiFilter === 'dropped') return disp === 'dropped';
+        if (batchKpiFilter === 'whatsup') return disp === 'whatsup' || disp === 'whatsapp';
+        if (batchKpiFilter === 'jad') return disp === 'jad';
         return true;
       });
     }
@@ -456,17 +458,21 @@ export default function BatchesTab({
               </h3>
               <p className="text-xs text-slate-400">
                 Batch ID: <span className="font-mono text-slate-600">{b.batch_id}</span>
+                {b.created_by && (
+                  <span className="ml-2 pl-2 border-l border-slate-200">
+                    Created by: <span className="font-medium text-slate-700">{b.created_by}</span>
+                  </span>
+                )}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <span
-              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider border ${
-                isCompleted
+              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider border ${isCompleted
                   ? 'bg-slate-100 text-slate-600 border-slate-200'
                   : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-              }`}
+                }`}
             >
               <span className={`w-1.5 h-1.5 ${isCompleted ? 'bg-slate-400' : 'bg-emerald-500 animate-pulse'}`} />
               {(b.status || 'ACTIVE').toUpperCase()}
@@ -521,7 +527,7 @@ export default function BatchesTab({
             )}
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-1.5">
+          <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-1.5">
             {/* Total Card */}
             <Card
               onClick={() => handleKpiCardClick('all')}
@@ -568,6 +574,38 @@ export default function BatchesTab({
                 {m.interested || 0}
               </span>
               <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">Interested</span>
+            </Card>
+
+            {/* WhatsApp Card */}
+            <Card
+              onClick={() => handleKpiCardClick('whatsup')}
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
+                batchKpiFilter === 'whatsup'
+                  ? 'bg-emerald-700 text-white border-emerald-700'
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
+            >
+              <span className={cn('block text-sm font-bold font-mono leading-none mb-0.5', batchKpiFilter === 'whatsup' ? 'text-white' : 'text-emerald-700')}>
+                {m.whatsup || 0}
+              </span>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">WhatsApp</span>
+            </Card>
+
+            {/* JAD Card */}
+            <Card
+              onClick={() => handleKpiCardClick('jad')}
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
+                batchKpiFilter === 'jad'
+                  ? 'bg-sky-600 text-white border-sky-600'
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
+            >
+              <span className={cn('block text-sm font-bold font-mono leading-none mb-0.5', batchKpiFilter === 'jad' ? 'text-white' : 'text-sky-600')}>
+                {m.jad || 0}
+              </span>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">JAD</span>
             </Card>
 
             {/* Not Interested Card */}
@@ -781,6 +819,7 @@ export default function BatchesTab({
           <TableHeader>
             <TableRow className="bg-muted/50 hover:bg-muted/50 border-b border-border">
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Campaign Batch</TableHead>
+              <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Created By</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Lead Date</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Total Calls</TableHead>
               <TableHead className="px-2.5 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap">Dialed</TableHead>
@@ -793,7 +832,7 @@ export default function BatchesTab({
           <TableBody>
             {filteredBatches.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center py-14 bg-muted/20">
+                <TableCell colSpan={9} className="text-center py-14 bg-muted/20">
                   <Layers className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-50" />
                   <p className="text-xs font-semibold text-foreground">
                     {batchListSearch ? 'No batches match your search filter' : 'No campaign batches recorded yet'}
@@ -836,6 +875,17 @@ export default function BatchesTab({
                         title={`Batch ID: ${b.batch_id}`}
                       >
                         {getCleanBatchName(b)}
+                      </span>
+                    </TableCell>
+
+                    {/* Created By */}
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
+                      <span
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground border border-border/40"
+                        title={b.created_by || 'system'}
+                      >
+                        <User className="size-2.5 text-muted-foreground shrink-0" />
+                        <span className="max-w-[120px] truncate">{b.created_by ? b.created_by.split('@')[0] : 'System'}</span>
                       </span>
                     </TableCell>
 
@@ -882,6 +932,16 @@ export default function BatchesTab({
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-50 text-emerald-700 border border-emerald-500/20" title="Interested">
                           Int: {m.interested || 0}
                         </span>
+                        {m.whatsup > 0 && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-100/60 text-emerald-800 border border-emerald-500/30" title="WhatsApp">
+                            WA: {m.whatsup}
+                          </span>
+                        )}
+                        {m.jad > 0 && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-sky-50 text-sky-700 border border-sky-500/20" title="JAD">
+                            JAD: {m.jad}
+                          </span>
+                        )}
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-rose-50 text-rose-700 border border-rose-500/20" title="Not Interested">
                           Decl: {m.not_interested || 0}
                         </span>

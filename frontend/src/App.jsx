@@ -13,13 +13,25 @@ import BatchesTab from './components/BatchesTab';
 import CompletedLogsTab from './components/CompletedLogsTab';
 import TemplatesTab from './components/TemplatesTab';
 import ErrorBoundary from './components/ErrorBoundary';
+import LoginView from './components/LoginView';
 
 // Main Swargaseema AI Telephony Console Application with full-width Left Sidebar Layout
 export default function App() {
   const [activeNav, setActiveNav] = useState('live');
   const [alertMessage, setAlertMessage] = useState('');
-  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [headerSearch, setHeaderSearch] = useState('');
+
+  // Authentication State
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem('swargaseema_token') || '');
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('swargaseema_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [isAuthValidating, setIsAuthValidating] = useState(true);
 
   // Campaign & Live HUD State
   const [campaignData, setCampaignData] = useState({
@@ -54,28 +66,107 @@ export default function App() {
 
   const wasCallActiveRef = useRef(false);
 
-  // Fetch Completed Call Logs with optional date range
-  const fetchCompletedLogs = useCallback(async (startDate, endDate) => {
-    setIsLoadingLogs(true);
-    try {
-      let url = '/calls?limit=500';
-      if (startDate) url += `&start_date=${encodeURIComponent(startDate)}`;
-      if (endDate) url += `&end_date=${encodeURIComponent(endDate)}`;
-      const res = await fetch(url);
-      if (!res.ok) return;
-      const list = await res.json();
-      setCompletedCalls(list || []);
-    } catch (err) {
-      setAlertMessage(`Failed to load call logs: ${err.message}`);
-    } finally {
-      setIsLoadingLogs(false);
+  // Authenticated fetch wrapper injecting Bearer token & handling session expiration
+  const authFetch = useCallback(
+    async (url, options = {}) => {
+      const token = authToken || localStorage.getItem('swargaseema_token');
+      const headers = {
+        ...(options.headers || {}),
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const response = await fetch(url, { ...options, headers });
+      if (response.status === 401) {
+        localStorage.removeItem('swargaseema_token');
+        localStorage.removeItem('swargaseema_user');
+        setAuthToken('');
+        setCurrentUser(null);
+      }
+      return response;
+    },
+    [authToken]
+  );
+
+  // Validate existing token on initial mount
+  useEffect(() => {
+    const token = localStorage.getItem('swargaseema_token');
+    if (!token) {
+      setIsAuthValidating(false);
+      return;
     }
+    fetch('/api/auth/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => {
+        if (res.ok) return res.json();
+        throw new Error('Unauthorized');
+      })
+      .then((data) => {
+        if (data.ok && data.user) {
+          setCurrentUser(data.user);
+          setAuthToken(token);
+        } else {
+          throw new Error('Invalid user payload');
+        }
+      })
+      .catch(() => {
+        localStorage.removeItem('swargaseema_token');
+        localStorage.removeItem('swargaseema_user');
+        setAuthToken('');
+        setCurrentUser(null);
+      })
+      .finally(() => {
+        setIsAuthValidating(false);
+      });
   }, []);
+
+  // Handle Logout
+  const handleLogout = useCallback(async () => {
+    try {
+      await authFetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Ignored
+    }
+    localStorage.removeItem('swargaseema_token');
+    localStorage.removeItem('swargaseema_user');
+    setAuthToken('');
+    setCurrentUser(null);
+  }, [authFetch]);
+
+  // Handle Login Success
+  const handleLoginSuccess = useCallback((user, token) => {
+    setCurrentUser(user);
+    setAuthToken(token);
+  }, []);
+
+  // Fetch Completed Call Logs with optional date range
+  const fetchCompletedLogs = useCallback(
+    async (startDate, endDate) => {
+      if (!authToken && !localStorage.getItem('swargaseema_token')) return;
+      setIsLoadingLogs(true);
+      try {
+        let url = '/calls?limit=500';
+        if (startDate) url += `&start_date=${encodeURIComponent(startDate)}`;
+        if (endDate) url += `&end_date=${encodeURIComponent(endDate)}`;
+        const res = await authFetch(url);
+        if (!res.ok) return;
+        const list = await res.json();
+        setCompletedCalls(list || []);
+      } catch (err) {
+        setAlertMessage(`Failed to load call logs: ${err.message}`);
+      } finally {
+        setIsLoadingLogs(false);
+      }
+    },
+    [authFetch, authToken]
+  );
 
   // Poll Campaign Status
   const fetchCampaignStatus = useCallback(async () => {
+    if (!authToken && !localStorage.getItem('swargaseema_token')) return;
     try {
-      const res = await fetch('/api/campaign/status');
+      const res = await authFetch('/api/campaign/status');
       if (!res.ok) return;
       const data = await res.json();
       setCampaignData(data);
@@ -117,40 +208,45 @@ export default function App() {
     } catch {
       // Background poll failure caught cleanly
     }
-  }, [fetchCompletedLogs]);
+  }, [authFetch, authToken, fetchCompletedLogs]);
 
   // Fetch CRM Pending Calls
-  const fetchCrmPendingCalls = useCallback(async (startDate, endDate) => {
-    const today = new Date().toISOString().slice(0, 10);
-    const start = startDate || today;
-    const end = endDate || today;
+  const fetchCrmPendingCalls = useCallback(
+    async (startDate, endDate) => {
+      if (!authToken && !localStorage.getItem('swargaseema_token')) return;
+      const today = new Date().toISOString().slice(0, 10);
+      const start = startDate || today;
+      const end = endDate || today;
 
-    setIsLoadingCrm(true);
-    setCrmError('');
-    try {
-      const res = await fetch(`/api/crm/pending-calls?start_date=${start}&end_date=${end}&status=all`);
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        const err = data.error || 'Failed to query CRM';
-        setCrmError(err);
-        setAlertMessage(`CRM Fetch Error: ${err}`);
-        return;
+      setIsLoadingCrm(true);
+      setCrmError('');
+      try {
+        const res = await authFetch(`/api/crm/pending-calls?start_date=${start}&end_date=${end}&status=all`);
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          const err = data.error || 'Failed to query CRM';
+          setCrmError(err);
+          setAlertMessage(`CRM Fetch Error: ${err}`);
+          return;
+        }
+        setAlertMessage('');
+        setCrmCalls(data.calls || []);
+      } catch (err) {
+        setCrmError(err.message);
+        setAlertMessage(`Network error connecting to CRM: ${err.message}`);
+      } finally {
+        setIsLoadingCrm(false);
       }
-      setAlertMessage('');
-      setCrmCalls(data.calls || []);
-    } catch (err) {
-      setCrmError(err.message);
-      setAlertMessage(`Network error connecting to CRM: ${err.message}`);
-    } finally {
-      setIsLoadingCrm(false);
-    }
-  }, []);
+    },
+    [authFetch, authToken]
+  );
 
   // Fetch Batches
   const fetchBatches = useCallback(async () => {
+    if (!authToken && !localStorage.getItem('swargaseema_token')) return;
     setIsLoadingBatches(true);
     try {
-      const res = await fetch('/api/campaign/batches');
+      const res = await authFetch('/api/campaign/batches');
       if (!res.ok) return;
       const data = await res.json();
       setBatches(data.batches || []);
@@ -159,12 +255,13 @@ export default function App() {
     } finally {
       setIsLoadingBatches(false);
     }
-  }, []);
+  }, [authFetch, authToken]);
 
   // Fetch Campaign Strategy Templates
   const fetchCampaignTemplates = useCallback(async () => {
+    if (!authToken && !localStorage.getItem('swargaseema_token')) return;
     try {
-      const res = await fetch('/api/campaign/templates');
+      const res = await authFetch('/api/campaign/templates');
       if (!res.ok) return;
       const data = await res.json();
       setTemplates(data.templates || []);
@@ -174,13 +271,13 @@ export default function App() {
     } catch (err) {
       console.error('Failed to load campaign templates:', err);
     }
-  }, []);
+  }, [authFetch, authToken]);
 
   // Select Active Template for Dialer and New Batches
   const handleSelectTemplate = async (templateId) => {
     setSelectedTemplateId(templateId);
     try {
-      await fetch('/api/campaign/select-template', {
+      await authFetch('/api/campaign/select-template', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ template_id: templateId }),
@@ -193,6 +290,8 @@ export default function App() {
 
   // Initial Load and Adaptive Polling (1.5s when dialing/in-call, 4s when idle; pauses when tab hidden)
   useEffect(() => {
+    if (!currentUser || !authToken) return;
+
     fetchCampaignTemplates();
     fetchCrmPendingCalls();
     fetchCampaignStatus();
@@ -209,12 +308,22 @@ export default function App() {
     }, delay);
 
     return () => clearInterval(timer);
-  }, [fetchCampaignTemplates, fetchCampaignStatus, fetchCrmPendingCalls, fetchCompletedLogs, fetchBatches, campaignData?.status, (campaignData?.active_calls || []).length]);
+  }, [
+    currentUser,
+    authToken,
+    fetchCampaignTemplates,
+    fetchCampaignStatus,
+    fetchCrmPendingCalls,
+    fetchCompletedLogs,
+    fetchBatches,
+    campaignData?.status,
+    (campaignData?.active_calls || []).length,
+  ]);
 
   // Campaign Actions
   const handleStartCampaign = async () => {
     try {
-      const res = await fetch('/api/campaign/start', { method: 'POST' });
+      const res = await authFetch('/api/campaign/start', { method: 'POST' });
       const data = await res.json();
       if (data.ok) {
         fetchCampaignStatus();
@@ -226,7 +335,7 @@ export default function App() {
 
   const handlePauseCampaign = async () => {
     try {
-      await fetch('/api/campaign/pause', { method: 'POST' });
+      await authFetch('/api/campaign/pause', { method: 'POST' });
       fetchCampaignStatus();
     } catch (err) {
       setAlertMessage(err.message);
@@ -235,7 +344,7 @@ export default function App() {
 
   const handleResumeCampaign = async () => {
     try {
-      await fetch('/api/campaign/resume', { method: 'POST' });
+      await authFetch('/api/campaign/resume', { method: 'POST' });
       fetchCampaignStatus();
     } catch (err) {
       setAlertMessage(err.message);
@@ -244,7 +353,7 @@ export default function App() {
 
   const handleStopCampaign = async () => {
     try {
-      await fetch('/api/campaign/stop', { method: 'POST' });
+      await authFetch('/api/campaign/stop', { method: 'POST' });
       fetchCampaignStatus();
     } catch (err) {
       setAlertMessage(err.message);
@@ -254,7 +363,7 @@ export default function App() {
   const handleResetQueue = async () => {
     if (!window.confirm('Clear active queue and reset counters to start a fresh batch?')) return;
     try {
-      const res = await fetch('/api/campaign/reset', { method: 'POST' });
+      const res = await authFetch('/api/campaign/reset', { method: 'POST' });
       const data = await res.json();
       if (data.ok) {
         await fetchCampaignStatus();
@@ -267,7 +376,7 @@ export default function App() {
 
   const handleRetryFailed = async () => {
     try {
-      await fetch('/api/campaign/reset', { method: 'POST' });
+      await authFetch('/api/campaign/reset', { method: 'POST' });
       fetchCampaignStatus();
     } catch (err) {
       setAlertMessage(err.message);
@@ -287,7 +396,7 @@ export default function App() {
     setActiveNav('live');
 
     try {
-      const res = await fetch('/api/dial', {
+      const res = await authFetch('/api/dial', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -328,7 +437,7 @@ export default function App() {
 
   const handleQueueLeads = async (payload) => {
     try {
-      const res = await fetch('/api/campaign/leads', {
+      const res = await authFetch('/api/campaign/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -346,6 +455,23 @@ export default function App() {
       setAlertMessage(`Network error: ${err.message}`);
     }
   };
+
+  // If session is validating on page load, show clean loader
+  if (isAuthValidating) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3">
+          <div className="size-8 border-2 border-[#008792] border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs text-muted-foreground font-mono">Initializing Swargaseema Voice Session...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // If not authenticated, show modern login view
+  if (!currentUser || !authToken) {
+    return <LoginView onLoginSuccess={handleLoginSuccess} />;
+  }
 
   const activeCall = campaignData.active_calls?.[0] || null;
 
@@ -365,6 +491,8 @@ export default function App() {
             ).length
           }
           completedCount={completedCalls.length}
+          currentUser={currentUser}
+          onLogout={handleLogout}
         />
 
         <SidebarInset className="flex flex-col h-screen overflow-hidden bg-background">

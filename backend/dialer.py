@@ -21,7 +21,8 @@ import vobiz_api
 class OutboundDialer:
     """Manages the outbound call queue, OBD campaign execution, and live call tracking."""
 
-    def __init__(self):
+    def __init__(self, user_email: Optional[str] = None):
+        self.user_email = user_email.strip().lower() if user_email else None
         self.status = "idle"
         self.queue: List[Dict[str, Any]] = []
         self.active_call: Optional[Dict[str, Any]] = None
@@ -116,6 +117,7 @@ class OutboundDialer:
         batch_doc = {
             "batch_id": batch_id,
             "name": batch_name or f"Batch {time.strftime('%Y-%m-%d %H:%M')}",
+            "created_by": self.user_email or "system",
             "source_filter": source_filter or "CRM Missed Calls",
             "template_id": effective_template_id,
             "template_name": (tpl.get("name") if tpl else effective_template_id) or "Standard",
@@ -269,10 +271,25 @@ class OutboundDialer:
         }
 
     # Update active call phase status
-    def set_call_status(self, call_uuid: str, status: str = "in_call"):
+    def set_call_status(
+        self,
+        call_uuid: str,
+        status: str = "in_call",
+        phone_number: str = "",
+        batch_id: Optional[str] = None,
+        template_id: Optional[str] = None,
+    ):
         if self.active_call:
             if not call_uuid or self.active_call.get("call_uuid") == call_uuid:
                 self.active_call["status"] = status
+        else:
+            self.set_active_call(
+                call_uuid=call_uuid,
+                phone_number=phone_number,
+                status=status,
+                batch_id=batch_id,
+                template_id=template_id,
+            )
 
     # Start automated dialer loop
     def start(self, public_url: str):
@@ -340,8 +357,9 @@ class OutboundDialer:
             lead_name = pending_item.get("customer_name", "")
             logger.info(f"Dialer initiating call to {target_phone} (batch: {batch_id})")
 
-            call_answer_url = f"{public_url}/answer?batch_id={batch_id}&lead_id={lead_id}&to={target_phone}&template_id={self.selected_template_id}"
-            call_hangup_url = f"{public_url}/hangup?batch_id={batch_id}&lead_id={lead_id}&to={target_phone}"
+            user_param = f"&user_email={self.user_email}" if self.user_email else ""
+            call_answer_url = f"{public_url}/answer?batch_id={batch_id}&lead_id={lead_id}&to={target_phone}&template_id={self.selected_template_id}{user_param}"
+            call_hangup_url = f"{public_url}/hangup?batch_id={batch_id}&lead_id={lead_id}&to={target_phone}{user_param}"
 
             try:
                 res = await vobiz_api.place_call(
@@ -467,6 +485,7 @@ class OutboundDialer:
             "next_in_queue": next_lead,
             "did": os.getenv("FROM_NUMBER", ""),
             "selected_template_id": self.selected_template_id,
+            "user_email": self.user_email,
         }
 
     # Set active campaign template for ad-hoc dials and upcoming batches
@@ -488,4 +507,72 @@ class OutboundDialer:
 def datetime_now_str() -> str:
     return time.strftime("%Y%m%d-%H%M%S")
 
-dialer = OutboundDialer()
+import threading
+
+class DialerManager:
+    """Thread-safe manager for per-user OutboundDialer instances."""
+    def __init__(self):
+        self._dialers: Dict[str, OutboundDialer] = {}
+        self._lock = threading.Lock()
+        self._default_dialer = OutboundDialer(user_email="system")
+
+    def get_dialer(self, user_email: Optional[str] = None) -> OutboundDialer:
+        """Retrieve or create an isolated dialer instance for a user."""
+        if not user_email or not user_email.strip():
+            return self._default_dialer
+        email = user_email.strip().lower()
+        with self._lock:
+            if email not in self._dialers:
+                logger.info(f"Initializing independent dialer session for user: {email}")
+                self._dialers[email] = OutboundDialer(user_email=email)
+            return self._dialers[email]
+
+    def find_dialer_by_call_uuid(self, call_uuid: str) -> Optional[OutboundDialer]:
+        """Find the dialer managing a call_uuid across all active user dialers."""
+        if not call_uuid:
+            return None
+        with self._lock:
+            all_dialers = list(self._dialers.values()) + [self._default_dialer]
+        for d in all_dialers:
+            if d.active_call and d.active_call.get("call_uuid") == call_uuid:
+                return d
+            if any(item.get("call_uuid") == call_uuid for item in d.queue):
+                return d
+        return None
+
+    def find_dialer_by_batch_id(self, batch_id: str) -> Optional[OutboundDialer]:
+        """Find dialer by active batch_id."""
+        if not batch_id:
+            return None
+        with self._lock:
+            all_dialers = list(self._dialers.values()) + [self._default_dialer]
+        for d in all_dialers:
+            if d.current_batch_id == batch_id:
+                return d
+        return None
+
+    def find_dialer_for_call(
+        self,
+        call_uuid: str = "",
+        user_email: Optional[str] = None,
+        batch_id: Optional[str] = None,
+    ) -> OutboundDialer:
+        """Resolve exact dialer using user_email, call_uuid, or batch_id with safe fallback."""
+        if user_email and user_email.strip():
+            return self.get_dialer(user_email.strip())
+        if call_uuid:
+            found = self.find_dialer_by_call_uuid(call_uuid)
+            if found:
+                return found
+        if batch_id:
+            found = self.find_dialer_by_batch_id(batch_id)
+            if found:
+                return found
+        return self._default_dialer
+
+    def list_active_dialers(self) -> List[OutboundDialer]:
+        with self._lock:
+            return list(self._dialers.values())
+
+dialer_manager = DialerManager()
+dialer = dialer_manager.get_dialer(None)

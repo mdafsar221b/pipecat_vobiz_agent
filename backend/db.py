@@ -732,24 +732,30 @@ def get_batch_metrics(batch_id: str) -> Dict[str, int]:
         "not_talking": 0,
         "no_answer": 0,
         "dropped": 0,
+        "whatsup": 0,
+        "jad": 0,
     }
     if col is not None and batch_id:
         try:
             calls = list(col.find({"batch_id": batch_id}, {"disposition": 1, "_id": 0}))
             metrics["dialed"] = len(calls)
             for c in calls:
-                disp = c.get("disposition")
+                disp = str(c.get("disposition") or "").lower()
                 if disp == "interested":
                     metrics["interested"] += 1
-                elif disp in ("not_interested", "declined"):
+                elif disp in ("not_interested", "declined", "ni"):
                     metrics["not_interested"] += 1
+                elif disp in ("whatsup", "whatsapp"):
+                    metrics["whatsup"] += 1
+                elif disp in ("jad",):
+                    metrics["jad"] += 1
                 elif disp == "wrong_number":
                     metrics["wrong_number"] += 1
                 elif disp in ("dropped", "system_error", "inquiry_drop"):
                     metrics["dropped"] += 1
                 elif disp == "not_talking":
                     metrics["not_talking"] += 1
-                elif disp in ("no_answer", "busy", "failed"):
+                elif disp in ("no_answer", "busy", "failed", "na"):
                     metrics["no_answer"] += 1
         except Exception as exc:
             logger.error(f"Failed to calculate metrics for batch {batch_id}: {exc}")

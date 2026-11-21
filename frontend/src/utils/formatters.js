@@ -33,6 +33,15 @@ export function formatDate(isoOrTimestamp) {
 export function getDispositionConfig(disposition) {
   const disp = (disposition || 'completed').toLowerCase();
   switch (disp) {
+    case 'whatsup':
+    case 'whatsapp':
+      return {
+        label: 'WhatsApp',
+        bg: 'bg-emerald-50',
+        text: 'text-emerald-700',
+        border: 'border-emerald-200',
+        dot: 'bg-emerald-500',
+      };
     case 'interested':
       return {
         label: 'Interested',
@@ -66,8 +75,17 @@ export function getDispositionConfig(disposition) {
         border: 'border-orange-200',
         dot: 'bg-orange-500',
       };
+    case 'jad':
+      return {
+        label: 'JAD',
+        bg: 'bg-sky-50',
+        text: 'text-sky-700',
+        border: 'border-sky-200',
+        dot: 'bg-sky-500',
+      };
     case 'no_answer':
     case 'busy':
+    case 'na':
       return {
         label: disp === 'busy' ? 'Busy' : 'No Answer',
         bg: 'bg-amber-50',

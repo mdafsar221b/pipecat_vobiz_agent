@@ -8,6 +8,8 @@ import {
   Sparkles,
   Radio,
   ChevronsUpDown,
+  User,
+  LogOut,
 } from 'lucide-react';
 import {
   Sidebar,
@@ -34,6 +36,8 @@ export default function AppSidebar({
   crmCount = 0,
   batchesCount = 0,
   completedCount = 0,
+  currentUser = null,
+  onLogout = null,
   ...props
 }) {
   const isRunning = campaignData?.is_running;
@@ -135,8 +139,8 @@ export default function AppSidebar({
         </SidebarGroup>
       </SidebarContent>
 
-      {/* Footer: Compact Trunk Status */}
-      <SidebarFooter className="p-1.5">
+      {/* Footer: Compact Trunk Status & User Session */}
+      <SidebarFooter className="p-1.5 space-y-1">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -169,6 +173,36 @@ export default function AppSidebar({
               </Badge>
             </SidebarMenuButton>
           </SidebarMenuItem>
+
+          {/* Authenticated User Profile & Logout */}
+          {currentUser && (
+            <SidebarMenuItem>
+              <div className="flex items-center justify-between gap-2 p-1.5 rounded-md bg-muted/40 border border-border/50 text-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="size-6 rounded-full bg-[#008792]/15 text-[#008792] flex items-center justify-center shrink-0 font-semibold text-[10px]">
+                    <User className="size-3.5" />
+                  </div>
+                  <div className="grid flex-1 text-left leading-none min-w-0">
+                    <span className="truncate font-medium text-[11px] text-foreground">
+                      {currentUser.name || currentUser.email?.split('@')[0]}
+                    </span>
+                    <span className="truncate text-[9px] text-muted-foreground mt-0.5">
+                      {currentUser.email}
+                    </span>
+                  </div>
+                </div>
+                {onLogout && (
+                  <button
+                    onClick={onLogout}
+                    title="Sign Out"
+                    className="p-1 rounded hover:bg-destructive/15 text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                  >
+                    <LogOut className="size-3.5" />
+                  </button>
+                )}
+              </div>
+            </SidebarMenuItem>
+          )}
         </SidebarMenu>
       </SidebarFooter>
 
