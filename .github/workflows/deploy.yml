@@ -46,7 +46,7 @@ jobs:
   deploy:
     name: Deploy to VPS
     needs: validate
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
@@ -58,10 +58,10 @@ jobs:
           port: 22
           script: |
             set -e
-            export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-            cd /home/github-deploy/apps/pipecat_vobiz_agent
+            cd /root/Aibot/outbound-ai/pipecat_vobiz_agent
             git fetch origin main
             git reset --hard origin/main
-            docker compose build voice-agent
-            docker compose up -d --no-deps voice-agent
-            docker image prune -f
+            source .venv/bin/activate
+            pip install -r requirements.txt
+            cd frontend && npm install && npm run build && cd ..
+            pm2 restart pipecat-vobiz-dev pipecat-vobiz-frontend
