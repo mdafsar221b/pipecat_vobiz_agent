@@ -54,17 +54,45 @@ export default function App() {
 
   const wasCallActiveRef = useRef(false);
 
-  // Fetch Completed Call Logs with optional date range
-  const fetchCompletedLogs = useCallback(async (startDate, endDate) => {
+  // Fetch Completed Call Logs with pagination and filters
+  const [completedPagination, setCompletedPagination] = useState({ total: 0, page: 1, limit: 50, pages: 1 });
+
+  const fetchCompletedLogs = useCallback(async (filters = {}) => {
     setIsLoadingLogs(true);
     try {
-      let url = '/calls?limit=500';
-      if (startDate) url += `&start_date=${encodeURIComponent(startDate)}`;
-      if (endDate) url += `&end_date=${encodeURIComponent(endDate)}`;
+      let url = '/calls';
+      const params = [];
+      const page = filters.page || 1;
+      const limit = filters.limit || 50;
+      params.push(`page=${page}`);
+      params.push(`limit=${limit}`);
+
+      if (filters.startDate) params.push(`start_date=${encodeURIComponent(filters.startDate)}`);
+      if (filters.endDate) params.push(`end_date=${encodeURIComponent(filters.endDate)}`);
+      if (filters.search) params.push(`search=${encodeURIComponent(filters.search)}`);
+      if (filters.disposition && filters.disposition !== 'all') {
+        params.push(`disposition=${encodeURIComponent(filters.disposition)}`);
+      }
+      if (filters.recordingOnly) params.push(`has_recording=true`);
+      if (filters.callbackOnly) params.push(`has_callback=true`);
+
+      url += `?${params.join('&')}`;
+
       const res = await fetch(url);
       if (!res.ok) return;
-      const list = await res.json();
-      setCompletedCalls(list || []);
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setCompletedCalls(data);
+        setCompletedPagination({ total: data.length, page: 1, limit: data.length, pages: 1 });
+      } else {
+        setCompletedCalls(data.calls || []);
+        setCompletedPagination({
+          total: data.total || 0,
+          page: data.page || 1,
+          limit: data.limit || 50,
+          pages: data.pages || 1,
+        });
+      }
     } catch (err) {
       setAlertMessage(`Failed to load call logs: ${err.message}`);
     } finally {
@@ -128,7 +156,7 @@ export default function App() {
     setIsLoadingCrm(true);
     setCrmError('');
     try {
-      const res = await fetch(`/api/crm/pending-calls?start_date=${start}&end_date=${end}&status=all`);
+      const res = await fetch(`/api/crm/pending-calls?start_date=${start}&end_date=${end}&status=pending`);
       const data = await res.json();
       if (!res.ok || !data.ok) {
         const err = data.error || 'Failed to query CRM';
@@ -378,7 +406,7 @@ export default function App() {
                 !b?.source_filter?.toLowerCase().includes('test')
             ).length
           }
-          completedCount={completedCalls.length}
+          completedCount={completedPagination.total || completedCalls.length}
         />
 
         <SidebarInset className="flex flex-col h-screen overflow-hidden bg-background">
@@ -521,6 +549,7 @@ export default function App() {
                 <ErrorBoundary onReset={fetchCompletedLogs}>
                   <CompletedLogsTab
                     completedCalls={completedCalls}
+                    pagination={completedPagination}
                     isLoadingLogs={isLoadingLogs}
                     onRefreshLogs={fetchCompletedLogs}
                     onQueueLeads={handleQueueLeads}

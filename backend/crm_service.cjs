@@ -40,7 +40,7 @@ for (const p of CANDIDATE_PATHS) {
   }
 }
 
-const MONGO_URI = process.env.REAL_MONGO_URI || process.env.MONGO_URI;
+const MONGO_URI = process.env.MONGO_URI;
 
 let isConnected = false;
 let mongoose = null;

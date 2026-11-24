@@ -17,21 +17,19 @@ import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { formatTime } from '../utils/formatters';
 
-// Completed calls inspection table with date filtering and batch re-queueing
+// Completed calls inspection table with date filtering, server-side pagination and batch re-queueing
 export default function CompletedLogsTab({
   completedCalls = [],
+  pagination = { total: 0, page: 1, limit: 50, pages: 1 },
   isLoadingLogs = false,
   onRefreshLogs,
   onQueueLeads,
   searchText: externalSearchText = '',
 }) {
   // Date Filter State
-  const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [dateRange, setDateRange] = useState(() => {
-    const today = new Date();
-    return { from: today, to: today };
-  });
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [dateRange, setDateRange] = useState(null);
   const [dateFilterActive, setDateFilterActive] = useState(false);
 
   // Filters State
@@ -43,6 +41,23 @@ export default function CompletedLogsTab({
   const [durationFilter, setDurationFilter] = useState('all');
   const [sortBy, setSortBy] = useState('newest');
   const [uniqueOnly, setUniqueOnly] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Trigger server fetch with current filter parameters
+  const triggerFetch = (page = 1, overrideFilters = {}) => {
+    setCurrentPage(page);
+    if (!onRefreshLogs) return;
+    onRefreshLogs({
+      page,
+      limit: 50,
+      startDate: overrideFilters.startDate !== undefined ? overrideFilters.startDate : startDate,
+      endDate: overrideFilters.endDate !== undefined ? overrideFilters.endDate : endDate,
+      search: overrideFilters.search !== undefined ? overrideFilters.search : (externalSearchText || searchQuery),
+      disposition: overrideFilters.disposition !== undefined ? overrideFilters.disposition : dispositionFilter,
+      recordingOnly: overrideFilters.recordingOnly !== undefined ? overrideFilters.recordingOnly : recordingOnly,
+      callbackOnly: overrideFilters.callbackOnly !== undefined ? overrideFilters.callbackOnly : callbackOnly,
+    });
+  };
 
   // Lead Selection State for Batch Creation
   const [selectedUuids, setSelectedUuids] = useState(new Set());
@@ -56,18 +71,24 @@ export default function CompletedLogsTab({
       const toStr = range.to ? format(range.to, 'yyyy-MM-dd') : fromStr;
       setEndDate(toStr);
       setDateFilterActive(true);
-      if (range.to && onRefreshLogs) {
-        onRefreshLogs(fromStr, toStr);
+      if (range.to) {
+        triggerFetch(1, { startDate: fromStr, endDate: toStr });
+        fetchGlobalStats(fromStr, toStr);
       }
     }
   };
 
   const handleFetchCalls = () => {
-    setDateFilterActive(true);
-    if (onRefreshLogs) onRefreshLogs(startDate, endDate);
+    setDateFilterActive(Boolean(startDate && endDate));
+    triggerFetch(1);
+    fetchGlobalStats(startDate, endDate);
   };
 
   const resetAllFilters = () => {
+    setStartDate('');
+    setEndDate('');
+    setDateRange(null);
+    setDateFilterActive(false);
     setSearchQuery('');
     setDispositionFilter('all');
     setHealthFilter('all');
@@ -76,39 +97,63 @@ export default function CompletedLogsTab({
     setDurationFilter('all');
     setSortBy('newest');
     setUniqueOnly(true);
-    setDateFilterActive(false);
-    if (onRefreshLogs) onRefreshLogs(null, null);
+    fetchGlobalStats('', '');
+    triggerFetch(1, {
+      startDate: '',
+      endDate: '',
+      search: '',
+      disposition: 'all',
+      recordingOnly: false,
+      callbackOnly: false,
+    });
   };
 
-  // Compute counts across dataset
-  const dispositionCounts = useMemo(() => {
-    const counts = { all: completedCalls.length };
-    for (const entry of completedCalls) {
-      const d = (entry.disposition || 'completed').toLowerCase();
-      counts[d] = (counts[d] || 0) + 1;
+  // Global disposition statistics from server
+  const [globalStats, setGlobalStats] = useState({ total: 0, dispositions: {} });
+
+  const fetchGlobalStats = async (start = startDate, end = endDate) => {
+    try {
+      let url = '/api/calls/stats';
+      const params = [];
+      if (start) params.push(`start_date=${encodeURIComponent(start)}`);
+      if (end) params.push(`end_date=${encodeURIComponent(end)}`);
+      if (params.length) url += `?${params.join('&')}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setGlobalStats(data);
+      }
+    } catch (err) {
+      console.error('Failed to load global call stats:', err);
     }
-    return counts;
-  }, [completedCalls]);
+  };
+
+  React.useEffect(() => {
+    fetchGlobalStats();
+  }, []);
+
+  // Compute counts across full database collection
+  const dispositionCounts = useMemo(() => {
+    return globalStats.dispositions || {};
+  }, [globalStats]);
 
   const notAnsweringCount = useMemo(() => {
-    return completedCalls.filter((c) => {
-      const d = (c.disposition || '').toLowerCase();
-      return ['no_answer', 'busy', 'not_talking', 'dropped'].includes(d);
-    }).length;
-  }, [completedCalls]);
+    const d = dispositionCounts;
+    return (d.no_answer || 0) + (d.busy || 0) + (d.not_talking || 0) + (d.dropped || 0);
+  }, [dispositionCounts]);
 
   const dispositionOptions = useMemo(
     () => [
-      { value: 'all', label: 'All Dispositions', count: completedCalls.length },
+      { value: 'all', label: 'All Dispositions', count: globalStats.total || pagination.total || completedCalls.length },
       { value: 'interested', label: 'Interested', count: dispositionCounts.interested || 0 },
-      { value: 'not_interested', label: 'Declined', count: dispositionCounts.not_interested || 0 },
+      { value: 'not_interested', label: 'Declined', count: (dispositionCounts.not_interested || 0) + (dispositionCounts.declined || 0) },
       { value: 'not_answering_busy', label: 'Retry (Busy / No Answer)', count: notAnsweringCount },
-      { value: 'no_answer', label: 'No Answer', count: dispositionCounts.no_answer || 0 },
+      { value: 'no_answer', label: 'No Answer', count: (dispositionCounts.no_answer || 0) + (dispositionCounts.busy || 0) },
       { value: 'wrong_number', label: 'Wrong Number', count: dispositionCounts.wrong_number || 0 },
       { value: 'not_talking', label: 'Not Talking', count: dispositionCounts.not_talking || 0 },
       { value: 'dropped', label: 'Dropped', count: dispositionCounts.dropped || 0 },
     ],
-    [completedCalls.length, dispositionCounts, notAnsweringCount]
+    [globalStats.total, pagination.total, completedCalls.length, dispositionCounts, notAnsweringCount]
   );
 
   // Filter and sort calls
@@ -385,7 +430,10 @@ export default function CompletedLogsTab({
             <StatusFacetedFilter
               title="Disposition"
               value={dispositionFilter}
-              onChange={setDispositionFilter}
+              onChange={(val) => {
+                setDispositionFilter(val);
+                triggerFetch(1, { disposition: val });
+              }}
               options={dispositionOptions}
             />
 
@@ -393,7 +441,11 @@ export default function CompletedLogsTab({
             <Button
               size="sm"
               variant={recordingOnly ? 'secondary' : 'outline'}
-              onClick={() => setRecordingOnly((v) => !v)}
+              onClick={() => {
+                const nextVal = !recordingOnly;
+                setRecordingOnly(nextVal);
+                triggerFetch(1, { recordingOnly: nextVal });
+              }}
               className={cn(
                 "h-8 gap-1.5 text-xs font-normal border-dashed",
                 recordingOnly && "border-solid bg-accent text-accent-foreground font-medium"
@@ -407,7 +459,11 @@ export default function CompletedLogsTab({
             <Button
               size="sm"
               variant={callbackOnly ? 'secondary' : 'outline'}
-              onClick={() => setCallbackOnly((v) => !v)}
+              onClick={() => {
+                const nextVal = !callbackOnly;
+                setCallbackOnly(nextVal);
+                triggerFetch(1, { callbackOnly: nextVal });
+              }}
               className={cn(
                 "h-8 gap-1.5 text-xs font-normal border-dashed",
                 callbackOnly && "border-solid bg-accent text-accent-foreground font-medium"
@@ -453,7 +509,10 @@ export default function CompletedLogsTab({
         <div className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-1.5 text-xs text-muted-foreground border border-border/80 bg-muted/30 rounded-md shrink-0">
           <div className="flex items-center gap-2">
             <span className="font-medium text-foreground">
-              {selectedCalls.length} of {filteredCalls.length} selected
+              {selectedCalls.length} selected
+              <span className="text-muted-foreground font-normal ml-1">
+                ({filteredCalls.length} on this page · {(pagination?.total || 0).toLocaleString()} total)
+              </span>
             </span>
             <Separator orientation="vertical" className="h-3.5" />
             <div className="flex items-center gap-1">
@@ -523,10 +582,42 @@ export default function CompletedLogsTab({
         onToggleSelect={toggleSelect}
         onToggleSelectAll={toggleSelectAll}
         onCallUpdated={() => {
-          if (onRefreshLogs) onRefreshLogs(startDate, endDate);
+          triggerFetch(currentPage);
         }}
         containerClassName="flex-1 min-h-0 overflow-auto"
       />
+
+      {/* Pagination Footer Controls */}
+      <div className="flex items-center justify-between text-xs text-muted-foreground px-2 pt-1 border-t border-border shrink-0">
+        <div>
+          Showing page <strong className="text-foreground">{pagination.page}</strong> of{' '}
+          <strong className="text-foreground">{pagination.pages || 1}</strong> (
+          <strong className="text-foreground">{pagination.total.toLocaleString()}</strong> total calls)
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={pagination.page <= 1 || isLoadingLogs}
+            onClick={() => triggerFetch(pagination.page - 1)}
+            className="h-6 px-2 text-xs"
+          >
+            Previous
+          </Button>
+          <span className="text-[11px] px-1 text-foreground font-mono">
+            {pagination.page} / {pagination.pages || 1}
+          </span>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={pagination.page >= pagination.pages || isLoadingLogs}
+            onClick={() => triggerFetch(pagination.page + 1)}
+            className="h-6 px-2 text-xs"
+          >
+            Next
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

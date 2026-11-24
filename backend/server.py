@@ -524,14 +524,36 @@ async def get_recording(call_uuid: str):
         logger.error(f"Failed to fetch recording {rec_url}: {exc}")
         return Response(content="Failed to retrieve recording", status_code=502)
 
-# Retrieve recent call history and transcripts with optional date range
-@app.get("/calls")
-async def list_calls(
-    limit: int = 500,
+# Retrieve global disposition and status metrics for all calls
+@app.get("/api/calls/stats")
+async def get_calls_stats(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ):
-    return db.get_recent_calls(limit=limit, start_date=start_date, end_date=end_date)
+    return db.get_call_stats(start_date=start_date, end_date=end_date)
+
+# Retrieve paginated call history and transcripts with server-side filters
+@app.get("/calls")
+async def list_calls(
+    page: int = 1,
+    limit: int = 50,
+    search: Optional[str] = None,
+    disposition: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    has_recording: Optional[bool] = None,
+    has_callback: Optional[bool] = None,
+):
+    return db.get_paginated_calls(
+        page=page,
+        limit=limit,
+        search=search,
+        disposition=disposition,
+        start_date=start_date,
+        end_date=end_date,
+        has_recording=has_recording,
+        has_callback=has_callback,
+    )
 
 # Update call record fields like disposition and callback time
 @app.api_route("/api/call/{call_uuid}", methods=["PATCH", "POST"])

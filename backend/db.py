@@ -38,16 +38,12 @@ MONGO_DB_NAME = _extract_db_name(MONGO_URI, os.getenv("MONGO_DB_NAME"))
 MONGO_COLLECTION_NAME = os.getenv("MONGO_COLLECTION_NAME", "vobiz_ai_calls")
 MONGO_BATCHES_COLLECTION_NAME = os.getenv("MONGO_BATCHES_COLLECTION_NAME", "campaign_batches")
 MONGO_TEMPLATES_COLLECTION_NAME = os.getenv("MONGO_TEMPLATES_COLLECTION_NAME", "campaign_templates")
-REAL_MONGO_URI = os.getenv("REAL_MONGO_URI", "")
-REAL_MONGO_DB_NAME = os.getenv("REAL_MONGO_DB_NAME", "")
 
 _client: Optional[MongoClient] = None
 _db: Optional[Database] = None
 _collection: Optional[Collection] = None
 _batches_col: Optional[Collection] = None
 _templates_col: Optional[Collection] = None
-_crm_client: Optional[MongoClient] = None
-_crm_db: Optional[Database] = None
 
 # Initialize MongoDB client and ensure collection indexes
 def get_collection() -> Optional[Collection]:
@@ -312,6 +308,23 @@ def get_batch(batch_id: str) -> Optional[Dict[str, Any]]:
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
+# Days of week mapping for telephony schema
+DAYS_MAP = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+IST_OFFSET = timedelta(hours=5, minutes=30)
+
+# Helper to compute duration bucket matching telephony_calls
+def get_duration_bucket(seconds: float) -> str:
+    if seconds <= 0:
+        return "0s"
+    elif seconds < 15:
+        return "<15s"
+    elif seconds <= 60:
+        return "15s-60s"
+    elif seconds <= 180:
+        return "1m-3m"
+    else:
+        return ">3m"
+
 # Create or upsert a call record
 def record_call_start(
     call_uuid: str,
@@ -320,26 +333,89 @@ def record_call_start(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     col = get_collection()
+    now_utc = datetime.now(timezone.utc)
+    ist_dt = now_utc + IST_OFFSET
+    meta = metadata or {}
+    did_num = re.sub(r"\D", "", meta.get("From") or "918071583794")
+    digits = re.sub(r"\D", "", str(phone_number))
+    ten_digit = digits[-10:] if len(digits) >= 10 else digits
+    raw_prefix = f"+91{ten_digit}" if len(ten_digit) == 10 else f"+{digits}"
+
     initial_doc = {
+        "callId": call_uuid,
+        "uuid": call_uuid,
         "call_uuid": call_uuid,
         "phone_number": phone_number,
+        "customerNumber": ten_digit,
+        "customerNumberRaw": raw_prefix,
+        "customerName": "",
+        "customerId": None,
+        "direction": "outbound",
+        "callStatus": "in_progress",
+        "isProductive": False,
+        "isFirstCall": True,
+        "isManual": False,
+        "isTransferred": False,
+        "abandonedInQueue": False,
+        "answeredWithinSla": True,
+        "agentName": "Ananya",
+        "agentExtension": did_num,
+        "agentId": None,
+        "teamLeaderName": "AI Operations",
+        "teamLeaderId": None,
+        "didNumber": did_num,
+        "didNumberRaw": f"+{did_num}",
+        "sourceName": "Vobiz AI - Ananya",
+        "campaignName": "AI Outbound Campaign",
+        "campaignId": batch_id or "BATCH-VOBIZ-AI",
+        "batchId": batch_id,
+        "batch_id": batch_id,
+        "queueName": "",
+        "queueWaitDuration": 0,
+        "callDate": ist_dt.strftime("%Y-%m-%d"),
+        "callHour": ist_dt.hour,
+        "dayOfWeek": DAYS_MAP[ist_dt.weekday()],
+        "callTimestamp": now_utc,
+        "answeredAt": None,
+        "endedAt": None,
+        "ringDuration": 0,
+        "talkDuration": 0,
+        "totalDuration": 0,
+        "durationBucket": "0s",
+        "disposition": "Not Talking",
+        "rawDisposition": "not_talking",
+        "dispositionNotes": "",
+        "dispositionSavedAt": None,
+        "missedType": None,
+        "hangupCause": "",
+        "hungUpBy": "unknown",
+        "carrier": "",
+        "circle": "",
+        "recordingName": "",
+        "recordingUrl": "",
+        "originalCollection": "vobiz_ai_calls",
+        "callbackStatus": "not_applicable",
+        "callbackAttempts": 0,
+        "callbackCallId": None,
+        "callbackTimestamp": None,
+        "callFlow": [{"type": "init", "value": call_uuid, "time": time.time()}],
+        "isAiCall": True,
+        "callbackSchedule": None,
+        "transcripts": [],
+        "aiDiagnostic": None,
         "status": "in_progress",
         "created_at": now_iso(),
         "start_time": time.time(),
-        "disposition": "not_talking",
         "customer_name": None,
         "callback_time": None,
         "reason": None,
-        "transcripts": [],
-        "metadata": metadata or {},
+        "metadata": meta,
     }
     if col is not None:
         try:
             update_op: Dict[str, Any] = {"$setOnInsert": initial_doc}
             if batch_id:
-                update_op["$set"] = {"batch_id": batch_id}
-            else:
-                initial_doc["batch_id"] = None
+                update_op["$set"] = {"batch_id": batch_id, "batchId": batch_id, "campaignId": batch_id}
             col.update_one({"call_uuid": call_uuid}, update_op, upsert=True)
         except Exception as exc:
             logger.error(f"Failed to record call start for {call_uuid}: {exc}")
@@ -592,6 +668,50 @@ def resolve_end_of_call_disposition(
 
     return {"disposition": "dropped", "reason": "Conversation disconnected before qualification outcome reached"}
 
+# Sync AI call resolution back to missed records in telephony_calls
+def sync_ai_resolution_to_telephony_calls(
+    phone_number: str,
+    ai_call_id: str,
+    is_answered: bool,
+    disposition: str,
+) -> None:
+    db_inst = get_db()
+    if db_inst is None:
+        return
+    try:
+        digits = re.sub(r"\D", "", str(phone_number))
+        ten_digit = digits[-10:] if len(digits) >= 10 else digits
+        if not ten_digit:
+            return
+
+        telephony_col = db_inst["telephony_calls"]
+        now_utc = datetime.now(timezone.utc)
+        status_val = "completed" if is_answered else "attempted"
+
+        # Update matched pending missed call in telephony_calls
+        telephony_col.update_many(
+            {
+                "customerNumber": ten_digit,
+                "direction": "inbound",
+                "missedType": {"$ne": None},
+                "callbackStatus": {"$in": ["pending", None]},
+            },
+            {
+                "$set": {
+                    "callbackStatus": status_val,
+                    "callbackCallId": ai_call_id,
+                    "callbackTimestamp": now_utc,
+                    "isAiResolved": True,
+                    "resolvedByAi": True,
+                    "callbackAgentName": "Ananya",
+                    "aiDisposition": disposition,
+                },
+                "$inc": {"callbackAttempts": 1},
+            },
+        )
+    except Exception as exc:
+        logger.error(f"Failed to sync AI resolution to telephony_calls for {phone_number}: {exc}")
+
 # Finalize call duration, disposition, and diagnostic health
 def finalize_call(
     call_uuid: str,
@@ -620,28 +740,96 @@ def finalize_call(
             resolved = resolve_end_of_call_disposition(doc, tracer, summary, disposition or fallback_disposition)
 
             final_disp = disposition or resolved.get("disposition") or ("dropped" if (doc and doc.get("transcripts")) else "not_talking")
+            raw_disp = final_disp.lower()
+            title_disp = raw_disp.replace("_", " ").title()
+            safe_name, safe_time = sanitize_to_english_metadata(resolved.get("customer_name"), resolved.get("callback_time"))
+            final_reason = reason or resolved.get("reason") or ""
+
+            dur_sec = float(duration) if duration is not None else 0.0
+            is_ans = dur_sec > 0 or raw_disp in ("interested", "not_interested", "not_talking", "completed")
+            call_st = "answered" if is_ans else ("busy" if raw_disp == "busy" else "missed")
+            is_prod = raw_disp in ("interested", "not_interested")
+
+            # Extract diagnostic & hangup attributes
+            diag = summary.get("diagnostic", {})
+            hangup_cause = "NORMAL_CLEARING"
+            hung_up_by = "unknown"
+            if isinstance(diag, dict) and "hangup" in diag:
+                hangup_cause = diag["hangup"].get("cause") or hangup_cause
+                hung_up_by = (diag["hangup"].get("source") or hung_up_by).lower()
+
+            # Construct callFlow from events
+            events = summary.get("events", [])
+            call_flow = []
+            if events:
+                for ev in events:
+                    call_flow.append({
+                        "type": ev.get("event"),
+                        "time": ev.get("time_epoch") or 0,
+                        "details": ev.get("details"),
+                    })
+            elif doc and doc.get("callFlow"):
+                call_flow = doc["callFlow"]
+
+            now_utc = datetime.now(timezone.utc)
             update_fields: Dict[str, Any] = {
                 "status": status,
-                "disposition": final_disp,
+                "callStatus": call_st,
+                "isProductive": is_prod,
+                "disposition": title_disp,
+                "rawDisposition": raw_disp,
+                "dispositionNotes": final_reason,
+                "dispositionSavedAt": now_utc,
+                "missedType": None if is_ans else "customer_missed",
+                "hangupCause": hangup_cause,
+                "hungUpBy": hung_up_by,
+                "talkDuration": int(dur_sec),
+                "totalDuration": int(dur_sec) + (3 if is_ans else 0),
+                "durationBucket": get_duration_bucket(dur_sec),
+                "endedAt": now_utc,
                 "ended_at": now_iso(),
                 "ended_at_epoch": time.time(),
                 "duration_seconds": duration,
-                "events": summary.get("events", []),
-                "diagnostic": summary.get("diagnostic", {}),
-                "audio_metrics": summary.get("diagnostic", {}).get("audio_metrics", {}),
+                "events": events,
+                "callFlow": call_flow,
+                "diagnostic": diag,
+                "audio_metrics": diag.get("audio_metrics", {}),
+                "aiDiagnostic": {
+                    "classification": diag.get("classification"),
+                    "rootCauseSummary": diag.get("root_cause_summary"),
+                    "audioMetrics": diag.get("audio_metrics", {}),
+                },
             }
-            safe_name, safe_time = sanitize_to_english_metadata(resolved.get("customer_name"), resolved.get("callback_time"))
+            if is_ans:
+                update_fields["answeredAt"] = now_utc - timedelta(seconds=dur_sec)
             if safe_name:
+                update_fields["customerName"] = safe_name
                 update_fields["customer_name"] = safe_name
             if safe_time:
                 update_fields["callback_time"] = safe_time
-            final_reason = reason or resolved.get("reason")
+            if safe_name or safe_time:
+                update_fields["callbackSchedule"] = {
+                    "preferredTime": safe_time or "",
+                    "customerName": safe_name or "",
+                }
             if final_reason:
                 update_fields["reason"] = final_reason
             if b_id:
                 update_fields["batch_id"] = b_id
+                update_fields["batchId"] = b_id
+                update_fields["campaignId"] = b_id
 
             col.update_one({"call_uuid": call_uuid}, {"$set": update_fields}, upsert=True)
+
+            # Sync callback outcome to telephony_calls missed call record
+            phone_val = (doc.get("phone_number") if doc else None) or (doc.get("customerNumber") if doc else None) or ""
+            if phone_val:
+                sync_ai_resolution_to_telephony_calls(
+                    phone_number=phone_val,
+                    ai_call_id=call_uuid,
+                    is_answered=is_ans,
+                    disposition=title_disp,
+                )
         except Exception as exc:
             logger.error(f"Failed to finalize call {call_uuid}: {exc}")
 
@@ -664,40 +852,148 @@ def get_call(call_uuid: str) -> Optional[Dict[str, Any]]:
             logger.error(f"Failed to query call {call_uuid}: {exc}")
     return None
 
-# Retrieve recent call records with optional date range
-def get_recent_calls(
-    limit: int = 500,
+# Query collection-level disposition and overall summary counts
+def get_call_stats(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     col = get_collection()
-    if col is not None:
-        try:
-            query: Dict[str, Any] = {}
-            if start_date and end_date:
-                query["created_at"] = {
-                    "$gte": f"{start_date}T00:00:00",
-                    "$lte": f"{end_date}T23:59:59.999999",
-                }
-            elif start_date:
-                query["created_at"] = {"$gte": f"{start_date}T00:00:00"}
-            elif end_date:
-                query["created_at"] = {"$lte": f"{end_date}T23:59:59.999999"}
+    if col is None:
+        return {"total": 0, "dispositions": {}}
 
-            cursor = col.find(query, {"_id": 0}).sort("created_at", DESCENDING).limit(limit)
-            calls = list(cursor)
-            for c in calls:
-                c["turns"] = c.get("transcripts", [])
-                c["duration"] = c.get("duration_seconds", 0) or 0
-                c["started"] = c.get("created_at", "")
-                c["ended"] = c.get("ended_at", "")
-                c["diagnostic"] = c.get("diagnostic") or {}
-                c["events"] = c.get("events") or []
-                c["audio_metrics"] = c.get("audio_metrics") or {}
-            return calls
-        except Exception as exc:
-            logger.error(f"Failed to query recent calls: {exc}")
-    return []
+    match_filter: Dict[str, Any] = {}
+    if start_date and end_date:
+        match_filter["callDate"] = start_date if start_date == end_date else {"$gte": start_date, "$lte": end_date}
+    elif start_date:
+        match_filter["callDate"] = {"$gte": start_date}
+    elif end_date:
+        match_filter["callDate"] = {"$lte": end_date}
+
+    pipeline = []
+    if match_filter:
+        pipeline.append({"$match": match_filter})
+    pipeline.append({
+        "$group": {
+            "_id": {"$toLower": "$rawDisposition"},
+            "count": {"$sum": 1},
+        }
+    })
+
+    try:
+        raw_counts = {str(d["_id"]): d["count"] for d in col.aggregate(pipeline)}
+        total = col.count_documents(match_filter)
+        return {
+            "total": total,
+            "dispositions": raw_counts,
+        }
+    except Exception as exc:
+        logger.error(f"Failed to calculate call stats: {exc}")
+        return {"total": 0, "dispositions": {}}
+
+# Compatibility helper for dialer status payload
+def get_recent_calls(limit: int = 1) -> List[Dict[str, Any]]:
+    res = get_paginated_calls(page=1, limit=limit)
+    return res.get("calls", [])
+
+def get_paginated_calls(
+    page: int = 1,
+    limit: int = 50,
+    search: Optional[str] = None,
+    disposition: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    has_recording: Optional[bool] = None,
+    has_callback: Optional[bool] = None,
+) -> Dict[str, Any]:
+    col = get_collection()
+    if col is None:
+        return {"calls": [], "total": 0, "page": page, "limit": limit, "pages": 0}
+
+    query: Dict[str, Any] = {}
+
+    # Date range
+    if start_date and end_date:
+        query["callDate"] = start_date if start_date == end_date else {"$gte": start_date, "$lte": end_date}
+    elif start_date:
+        query["callDate"] = {"$gte": start_date}
+    elif end_date:
+        query["callDate"] = {"$lte": end_date}
+
+    # Disposition filter
+    if disposition and disposition != "all":
+        disp_clean = disposition.lower()
+        if disp_clean == "not_answering_busy":
+            query["rawDisposition"] = {"$in": ["no_answer", "busy", "not_talking", "dropped"]}
+        elif disp_clean == "no_answer":
+            query["rawDisposition"] = {"$in": ["no_answer", "busy"]}
+        else:
+            query["rawDisposition"] = disp_clean
+
+    # Recording filter
+    if has_recording:
+        query["recordingUrl"] = {"$exists": True, "$ne": ""}
+
+    # Callback filter
+    if has_callback:
+        query["$or"] = [
+            {"callback_time": {"$exists": True, "$ne": "", "$ne": None}},
+            {"callbackSchedule.preferredTime": {"$exists": True, "$ne": "", "$ne": None}},
+        ]
+
+    # Server-side text search across phone number, name, disposition notes
+    if search and search.strip():
+        q_str = search.strip()
+        digits = re.sub(r"\D", "", q_str)
+        or_clauses = [
+            {"customerName": {"$regex": re.escape(q_str), "$options": "i"}},
+            {"dispositionNotes": {"$regex": re.escape(q_str), "$options": "i"}},
+            {"callId": {"$regex": re.escape(q_str), "$options": "i"}},
+        ]
+        if digits:
+            or_clauses.append({"customerNumber": {"$regex": re.escape(digits)}})
+            or_clauses.append({"phone_number": {"$regex": re.escape(digits)}})
+        query["$or"] = or_clauses
+
+    try:
+        total = col.count_documents(query)
+        skip = max(0, (page - 1) * limit)
+
+        # Exclude massive nested payloads from list view
+        projection = {
+            "_id": 0,
+            "transcripts": 0,
+            "callFlow": 0,
+            "events": 0,
+            "metadata": 0,
+        }
+
+        cursor = col.find(query, projection).sort("callTimestamp", DESCENDING).skip(skip).limit(limit)
+        calls = list(cursor)
+
+        for c in calls:
+            c["duration"] = c.get("duration_seconds", 0) or c.get("talkDuration", 0) or 0
+            c["started"] = c.get("created_at", "")
+            c["ended"] = c.get("ended_at", "")
+            c["diagnostic"] = c.get("diagnostic") or {}
+            c["audio_metrics"] = c.get("audio_metrics") or {}
+            # Fallback customer name from customerName or callbackSchedule
+            if not c.get("customer_name"):
+                c["customer_name"] = c.get("customerName") or (c.get("callbackSchedule") or {}).get("customerName") or ""
+            # Fallback callback time from callbackSchedule.preferredTime
+            if not c.get("callback_time"):
+                c["callback_time"] = (c.get("callbackSchedule") or {}).get("preferredTime") or ""
+
+        pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
+        return {
+            "calls": calls,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "pages": pages,
+        }
+    except Exception as exc:
+        logger.error(f"Failed to query paginated calls: {exc}")
+        return {"calls": [], "total": 0, "page": page, "limit": limit, "pages": 0}
 
 # Save or update a campaign batch document
 def save_batch(batch_doc: Dict[str, Any]) -> None:
@@ -771,22 +1067,61 @@ def get_batch_metrics(batch_id: str) -> Dict[str, int]:
             logger.error(f"Failed to calculate metrics for batch {batch_id}: {exc}")
     return metrics
 
-# Retrieve all campaign batches with live metrics
+# Retrieve all campaign batches with live metrics via single aggregation
 def get_batches() -> List[Dict[str, Any]]:
-    col = get_batches_collection()
+    b_col = get_batches_collection()
+    c_col = get_collection()
     batches: List[Dict[str, Any]] = []
-    if col is not None:
+    if b_col is None:
+        return batches
+
+    # Pre-aggregate all batch metrics from calls in a single pipeline
+    metrics_map: Dict[str, Dict[str, int]] = {}
+    if c_col is not None:
         try:
-            cursor = col.find({}, {"_id": 0}).sort("created_at", DESCENDING)
-            for b in cursor:
-                bid = b.get("batch_id", "")
-                m = get_batch_metrics(bid)
-                total = b.get("total_leads", 0)
-                m["pending"] = max(0, total - m["dialed"])
-                b["metrics"] = m
-                batches.append(b)
+            pipeline = [
+                {
+                    "$group": {
+                        "_id": "$batch_id",
+                        "dialed": {"$sum": 1},
+                        "interested": {"$sum": {"$cond": [{"$eq": [{"$toLower": "$rawDisposition"}, "interested"]}, 1, 0]}},
+                        "not_interested": {"$sum": {"$cond": [{"$in": [{"$toLower": "$rawDisposition"}, ["not_interested", "declined"]]}, 1, 0]}},
+                        "wrong_number": {"$sum": {"$cond": [{"$eq": [{"$toLower": "$rawDisposition"}, "wrong_number"]}, 1, 0]}},
+                        "not_talking": {"$sum": {"$cond": [{"$eq": [{"$toLower": "$rawDisposition"}, "not_talking"]}, 1, 0]}},
+                        "no_answer": {"$sum": {"$cond": [{"$in": [{"$toLower": "$rawDisposition"}, ["no_answer", "busy", "failed"]]}, 1, 0]}},
+                        "dropped": {"$sum": {"$cond": [{"$in": [{"$toLower": "$rawDisposition"}, ["dropped", "system_error", "inquiry_drop"]]}, 1, 0]}},
+                    }
+                }
+            ]
+            for row in c_col.aggregate(pipeline):
+                bid = row.get("_id")
+                if bid:
+                    metrics_map[str(bid)] = {
+                        "dialed": row.get("dialed", 0),
+                        "interested": row.get("interested", 0),
+                        "not_interested": row.get("not_interested", 0),
+                        "wrong_number": row.get("wrong_number", 0),
+                        "not_talking": row.get("not_talking", 0),
+                        "no_answer": row.get("no_answer", 0),
+                        "dropped": row.get("dropped", 0),
+                    }
         except Exception as exc:
-            logger.error(f"Failed to query batches: {exc}")
+            logger.error(f"Failed to pre-aggregate batch metrics: {exc}")
+
+    try:
+        cursor = b_col.find({}, {"_id": 0}).sort("created_at", DESCENDING)
+        for b in cursor:
+            bid = str(b.get("batch_id") or "")
+            m = metrics_map.get(bid, {
+                "dialed": 0, "interested": 0, "not_interested": 0,
+                "wrong_number": 0, "not_talking": 0, "no_answer": 0, "dropped": 0
+            }).copy()
+            total = b.get("total_leads", 0)
+            m["pending"] = max(0, total - m["dialed"])
+            b["metrics"] = m
+            batches.append(b)
+    except Exception as exc:
+        logger.error(f"Failed to query batches: {exc}")
     return batches
 
 # Retrieve a batch document and all its associated calls
@@ -804,12 +1139,24 @@ def get_batch_detail(batch_id: str) -> Dict[str, Any]:
     calls: List[Dict[str, Any]] = []
     if c_col is not None:
         try:
-            cursor = c_col.find({"batch_id": batch_id}, {"_id": 0}).sort("created_at", DESCENDING)
+            projection = {
+                "_id": 0,
+                "transcripts": 0,
+                "callFlow": 0,
+                "events": 0,
+                "metadata": 0,
+            }
+            cursor = c_col.find({"$or": [{"batch_id": batch_id}, {"campaignId": batch_id}]}, projection).sort("callTimestamp", DESCENDING)
             for c in cursor:
-                c["turns"] = c.get("transcripts", [])
-                c["duration"] = c.get("duration_seconds", 0) or 0
+                c["duration"] = c.get("duration_seconds", 0) or c.get("talkDuration", 0) or 0
                 c["started"] = c.get("created_at", "")
                 c["ended"] = c.get("ended_at", "")
+                c["diagnostic"] = c.get("diagnostic") or {}
+                c["audio_metrics"] = c.get("audio_metrics") or {}
+                if not c.get("customer_name"):
+                    c["customer_name"] = c.get("customerName") or (c.get("callbackSchedule") or {}).get("customerName") or ""
+                if not c.get("callback_time"):
+                    c["callback_time"] = (c.get("callbackSchedule") or {}).get("preferredTime") or ""
                 calls.append(c)
         except Exception as exc:
             logger.error(f"Failed to query calls for batch {batch_id}: {exc}")
@@ -866,38 +1213,17 @@ def get_latest_ai_call_by_phone() -> Dict[str, Dict[str, Any]]:
         logger.error(f"Failed to query latest AI calls: {exc}")
         return {}
 
-# Initialize CRM database connection for live missed calls
+# Retrieve MongoDB database instance (Single Source of Truth)
 def get_crm_db() -> Optional[Database]:
-    global _crm_client, _crm_db
-    if _crm_db is not None:
-        return _crm_db
-    uri = REAL_MONGO_URI or MONGO_URI
-    db_name = REAL_MONGO_DB_NAME or MONGO_DB_NAME or _extract_db_name(uri)
-    if not uri or not db_name:
-        return get_db()
-
-    # If CRM DB matches the primary DB, reuse existing connection
-    main_db = get_db()
-    if main_db is not None and main_db.name == db_name:
-        _crm_db = main_db
-        return _crm_db
-
-    try:
-        _crm_client = MongoClient(uri, serverSelectionTimeoutMS=8000)
-        _crm_db = _crm_client[db_name]
-        logger.info(f"Connected to CRM database: {db_name}")
-        return _crm_db
-    except Exception as exc:
-        logger.error(f"CRM DB connection failed: {exc}")
-        return get_db()
+    return get_db()
 
 
-# Query CRM calls from unified telephony_calls collection
+# Query clean, unique pending missed calls from telephony_calls SSOT
 def fetch_crm_from_telephony_calls(
     db_inst: Database,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    status_filter: Optional[str] = "all",
+    status_filter: Optional[str] = "pending",
 ) -> List[Dict[str, Any]]:
     tel_col = db_inst["telephony_calls"]
     ist_offset = timedelta(hours=5, minutes=30)
@@ -909,117 +1235,61 @@ def fetch_crm_from_telephony_calls(
     elif not end_date:
         end_date = start_date
 
-    match_query: Dict[str, Any] = {}
+    match_query: Dict[str, Any] = {
+        "direction": "inbound",
+        "callStatus": "missed",
+    }
     if start_date == end_date:
         match_query["callDate"] = start_date
     else:
         match_query["callDate"] = {"$gte": start_date, "$lte": end_date}
 
-    if status_filter == "all_records":
-        pass
-    else:
-        match_query["direction"] = "inbound"
-        match_query["callStatus"] = "missed"
-        if status_filter == "pending":
-            match_query["callbackStatus"] = "pending"
-        elif status_filter in ("resolved", "completed", "called"):
-            match_query["callbackStatus"] = "completed"
-        elif status_filter == "attempted":
-            match_query["callbackStatus"] = "attempted"
+    if status_filter != "all_records":
+        match_query["callbackStatus"] = "pending"
 
-    cursor = tel_col.find(match_query).sort("callTimestamp", -1)
-    calls = list(cursor)
+    # Only project minimal fields needed
+    projection = {
+        "customerNumber": 1,
+        "customerNumberRaw": 1,
+        "customerName": 1,
+        "callTimestamp": 1,
+        "callDate": 1,
+    }
 
-    cb_ids = [m.get("callbackCallId") for m in calls if m.get("callbackCallId")]
-    cb_map: Dict[str, Dict[str, Any]] = {}
-    if cb_ids:
-        projection = {
-            "callId": 1,
-            "disposition": 1,
-            "rawDisposition": 1,
-            "dispositionNotes": 1,
-            "agentName": 1,
-            "callTimestamp": 1,
-        }
-        for c in tel_col.find({"callId": {"$in": cb_ids}}, projection):
-            cb_map[c["callId"]] = c
+    cursor = tel_col.find(match_query, projection).sort("callTimestamp", -1)
 
-    unresolved_nums = [
-        m.get("customerNumber")
-        for m in calls
-        if m.get("customerNumber") and (not m.get("callbackCallId") or m.get("callbackCallId") not in cb_map)
-    ]
-    outbound_by_num: Dict[str, Dict[str, Any]] = {}
-    if unresolved_nums:
-        ob_projection = {
-            "customerNumber": 1,
-            "disposition": 1,
-            "rawDisposition": 1,
-            "dispositionNotes": 1,
-            "agentName": 1,
-            "callTimestamp": 1,
-        }
-        ob_query: Dict[str, Any] = {
-            "direction": "outbound",
-            "customerNumber": {"$in": unresolved_nums},
-        }
-        if start_date == end_date:
-            ob_query["callDate"] = start_date
-        else:
-            ob_query["callDate"] = {"$gte": start_date, "$lte": end_date}
-
-        for ob in tel_col.find(ob_query, ob_projection).sort("callTimestamp", -1):
-            if ob["customerNumber"] not in outbound_by_num:
-                outbound_by_num[ob["customerNumber"]] = ob
-
+    seen_phones = set()
     results = []
-    for m in calls:
-        cb = cb_map.get(m.get("callbackCallId")) or outbound_by_num.get(m.get("customerNumber"))
-        cb_status = m.get("callbackStatus")
-        if cb_status in ("completed", "resolved"):
-            st = "resolved"
-        elif cb_status == "attempted":
-            st = "attempted"
-        elif cb_status == "pending":
-            st = "pending"
-        else:
-            st = m.get("callStatus") or "pending"
 
-        num = m.get("customerNumberRaw") or m.get("customerNumber") or ""
-        if len(str(num)) == 10 and not str(num).startswith("+"):
-            num = f"+91{num}"
+    for m in cursor:
+        raw_num = m.get("customerNumberRaw") or m.get("customerNumber") or ""
+        digits = re.sub(r"\D", "", str(raw_num))
+        ten_digit = digits[-10:] if len(digits) >= 10 else digits
+        if not ten_digit:
+            continue
 
-        crm_disp = (cb.get("disposition") if cb else None) or m.get("disposition") or ""
-        crm_raw_disp = (cb.get("rawDisposition") if cb else None) or m.get("rawDisposition") or ""
-        crm_notes = (cb.get("dispositionNotes") if cb else None) or m.get("dispositionNotes") or ""
-        crm_agent = (cb.get("agentName") if cb else None) or m.get("agentName") or ""
+        # Keep strictly unique by phone number (most recent call)
+        if ten_digit in seen_phones:
+            continue
+        seen_phones.add(ten_digit)
+
+        formatted_phone = f"+91{ten_digit}" if len(ten_digit) == 10 else f"+{digits}"
+        cust_name = (m.get("customerName") or "").strip()
+        ts = m.get("callTimestamp")
+        date_str = ts.strftime("%Y-%m-%d %I:%M %p") if isinstance(ts, datetime) else str(m.get("callDate") or "")
 
         results.append({
             "id": str(m.get("_id", "")),
-            "callId": m.get("callId", ""),
-            "phone_number": str(num),
-            "customer_name": m.get("customerName") or "",
-            "source": m.get("sourceName") or "",
-            "dialedDid": m.get("didNumberRaw") or m.get("didNumber") or "",
-            "campaign": m.get("campaignName") or "",
-            "missedAgents": [m.get("agentName")] if m.get("agentName") else ["Queue"],
-            "duration": m.get("ringDuration") or m.get("totalDuration") or 0,
-            "circle": m.get("circle") or "",
-            "operator": m.get("carrier") or "",
-            "createdAt": m.get("callTimestamp").isoformat() if hasattr(m.get("callTimestamp"), "isoformat") else str(m.get("callTimestamp") or ""),
-            "startStamp": str(m.get("callTimestamp") or ""),
-            "status": st,
-            "direction": m.get("direction", "inbound"),
-            "call_status": m.get("callStatus", "missed"),
-            "crm_disposition": crm_disp,
-            "crm_raw_disposition": crm_raw_disp,
-            "crm_disposition_notes": crm_notes,
-            "crm_callback_agent": crm_agent,
+            "phone_number": formatted_phone,
+            "customer_name": cust_name or "--",
+            "date": date_str,
+            "createdAt": ts.isoformat() if isinstance(ts, datetime) else date_str,
+            "status": "pending",
         })
 
     return results
 
-# Query inbound missed calls from telephony_calls with legacy webhook fallback
+# Query inbound missed calls from telephony_calls SSOT
 def fetch_crm_missed_calls(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -1029,202 +1299,7 @@ def fetch_crm_missed_calls(
     if db_inst is None:
         return []
     try:
-        col_names = db_inst.list_collection_names()
-        if "telephony_calls" in col_names:
-            return fetch_crm_from_telephony_calls(db_inst, start_date, end_date, status_filter)
-
-        if "hook_v2_inbound_hangup_missed" not in col_names:
-            logger.info(f"Neither telephony_calls nor hook_v2_inbound_hangup_missed found in database '{db_inst.name}'. Returning empty list.")
-            return []
-
-        ist_offset = timedelta(hours=5, minutes=30)
-        now_utc = datetime.now(timezone.utc)
-        now_ist = now_utc + ist_offset
-
-        if not start_date:
-            start_utc = now_ist.replace(hour=0, minute=0, second=0, microsecond=0) - ist_offset
-            end_utc = now_ist.replace(hour=23, minute=59, second=59, microsecond=999999) - ist_offset
-        else:
-            sp = [int(p) for p in start_date.split("-")]
-            start_utc = datetime(sp[0], sp[1], sp[2], 0, 0, 0) - ist_offset
-            if end_date:
-                ep = [int(p) for p in end_date.split("-")]
-                end_utc = datetime(ep[0], ep[1], ep[2], 23, 59, 59, 999999) - ist_offset
-            else:
-                end_utc = datetime(sp[0], sp[1], sp[2], 23, 59, 59, 999999) - ist_offset
-
-        match_stage = {"createdAt": {"$gte": start_utc, "$lte": end_utc}}
-
-        pipeline = [
-            {"$match": match_stage},
-            {"$sort": {"createdAt": -1}},
-            {
-                "$group": {
-                    "_id": "$call_id",
-                    "doc": {"$first": "$$ROOT"}
-                }
-            },
-            {"$replaceRoot": {"newRoot": "$doc"}},
-            {"$sort": {"createdAt": -1}}
-        ]
-
-        missed_col = db_inst["hook_v2_inbound_hangup_missed"]
-        missed_calls = list(missed_col.aggregate(pipeline))
-
-        # Collect 10-digit customer phone numbers
-        all_numbers_10 = set()
-        for c in missed_calls:
-            num = c.get("caller_id_number") or ""
-            digits = re.sub(r"\D", "", str(num))[-10:]
-            if len(digits) == 10:
-                all_numbers_10.add(digits)
-
-        number_variants = list(all_numbers_10)
-        for n in list(all_numbers_10):
-            number_variants.extend([f"+91{n}", f"91{n}", f"0{n}"])
-
-        outbound_map: Dict[str, List[Dict[str, Any]]] = {}
-
-        if number_variants:
-            outbound_filter = {
-                "createdAt": {"$gte": start_utc},
-                "$or": [
-                    {"call_to_number": {"$in": number_variants}},
-                    {"broadcast_lead_fields.Phone_Number": {"$in": number_variants}},
-                    {"customer_no_with_prefix": {"$in": number_variants}},
-                    {"customer_no_with_prefix ": {"$in": number_variants}},
-                ]
-            }
-
-            inbound_filter = {
-                "createdAt": {"$gte": start_utc},
-                "$or": [
-                    {"caller_id_number": {"$in": number_variants}},
-                    {"call_from_number": {"$in": number_variants}},
-                    {"broadcast_lead_fields.Phone_Number": {"$in": number_variants}},
-                    {"customer_no_with_prefix": {"$in": number_variants}},
-                ]
-            }
-
-            fields = {
-                "call_to_number": 1,
-                "caller_id_number": 1,
-                "call_from_number": 1,
-                "broadcast_lead_fields.Phone_Number": 1,
-                "customer_no_with_prefix": 1,
-                "customer_no_with_prefix ": 1,
-                "isAnswered": 1,
-                "call_status": 1,
-                "call_connected": 1,
-                "createdAt": 1,
-                "start_stamp": 1,
-            }
-
-            answered_docs = list(db_inst["hook_v2_outbound_hangup_answered"].find(outbound_filter, fields))
-            missed_docs = list(db_inst["hook_v2_outbound_hangup_missed"].find(outbound_filter, fields))
-            in_answered_docs = list(db_inst["hook_v2_inbound_hangup_answered"].find(inbound_filter, fields))
-
-            all_outbounds = []
-            for d in answered_docs:
-                ext = d.get("call_to_number") or (d.get("broadcast_lead_fields") or {}).get("Phone_Number") or d.get("customer_no_with_prefix") or d.get("customer_no_with_prefix ")
-                all_outbounds.append({"ext": ext, "is_ans": True, "doc": d})
-            for d in missed_docs:
-                ext = d.get("call_to_number") or (d.get("broadcast_lead_fields") or {}).get("Phone_Number") or d.get("customer_no_with_prefix") or d.get("customer_no_with_prefix ")
-                all_outbounds.append({"ext": ext, "is_ans": False, "doc": d})
-            for d in in_answered_docs:
-                ext = d.get("caller_id_number") or d.get("call_from_number") or d.get("customer_no_with_prefix")
-                all_outbounds.append({"ext": ext, "is_ans": True, "doc": d})
-
-            for item in all_outbounds:
-                raw = item["ext"] or ""
-                clean_num = re.sub(r"\D", "", str(raw))[-10:]
-                if clean_num:
-                    outbound_map.setdefault(clean_num, []).append(item)
-
-        results = []
-        for c in missed_calls:
-            num = c.get("caller_id_number") or ""
-            d10 = re.sub(r"\D", "", str(num))[-10:]
-            cust_outbounds = outbound_map.get(d10, [])
-            missed_time = c.get("createdAt")
-
-            # Match callbacks made on or after the missed call (-5s tolerance) exactly like Corely CRM
-            post_callbacks = []
-            if missed_time:
-                for o in cust_outbounds:
-                    o_time = o["doc"].get("createdAt")
-                    if o_time and o_time >= (missed_time - timedelta(seconds=5)):
-                        post_callbacks.append(o)
-            else:
-                post_callbacks = cust_outbounds
-
-            ans_cb = next(
-                (o for o in post_callbacks if o["is_ans"] or o["doc"].get("call_status") == "answered" or str(o["doc"].get("call_connected")) == "1"),
-                None
-            )
-            cb_doc = ans_cb or (post_callbacks[-1] if post_callbacks else None)
-
-            status = "pending"
-            if cb_doc:
-                is_conn = cb_doc["is_ans"] or cb_doc["doc"].get("call_status") == "answered" or str(cb_doc["doc"].get("call_connected")) == "1"
-                status = "called" if is_conn else "attempted"
-
-            if status_filter == "pending" and status != "pending":
-                continue
-            if status_filter == "called" and status != "called":
-                continue
-            if status_filter == "attempted" and status != "attempted":
-                continue
-
-            # Resolve agents
-            agents = []
-            ma = c.get("missed_agent")
-            if isinstance(ma, list):
-                for a in ma:
-                    if isinstance(a, dict) and a.get("name"):
-                        agents.append(a["name"])
-            elif isinstance(ma, str) and ma:
-                agents.append(ma)
-            if not agents and c.get("answered_agent_name"):
-                agents.append(c["answered_agent_name"])
-
-            # Resolve customer name and source
-            bfields = c.get("broadcast_lead_fields") or {}
-            cust_name = bfields.get("Full_Name") or bfields.get("Customer_Name") or ""
-            if cust_name in ("nt", "Unknown"):
-                cust_name = ""
-
-            source = c.get("source_name") or bfields.get("Source") or ""
-            circle_info = c.get("billing_circle") or ""
-            circle_str = circle_info.get("circle", "") if isinstance(circle_info, dict) else str(circle_info)
-            operator_str = circle_info.get("operator", "") if isinstance(circle_info, dict) else ""
-
-            duration_val = c.get("duration") or 0
-            try:
-                duration_int = int(float(duration_val))
-            except (ValueError, TypeError):
-                duration_int = 0
-
-            created_iso = c.get("createdAt").isoformat() if hasattr(c.get("createdAt"), "isoformat") else str(c.get("createdAt") or "")
-
-            results.append({
-                "id": str(c.get("_id", "")),
-                "callId": c.get("call_id", ""),
-                "phone_number": num,
-                "customer_name": cust_name,
-                "source": source,
-                "dialedDid": c.get("call_to_number") or "",
-                "campaign": c.get("campaign_name") or "",
-                "missedAgents": agents,
-                "duration": duration_int,
-                "circle": circle_str,
-                "operator": operator_str,
-                "createdAt": created_iso,
-                "startStamp": c.get("start_stamp") or "",
-                "status": status,
-            })
-
-        return results
+        return fetch_crm_from_telephony_calls(db_inst, start_date, end_date, status_filter)
     except Exception as exc:
-        logger.error(f"Failed to fetch CRM missed calls natively: {exc}")
+        logger.error(f"Failed to fetch CRM missed calls from telephony_calls: {exc}")
         return []

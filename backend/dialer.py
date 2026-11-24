@@ -61,29 +61,13 @@ class OutboundDialer:
         self,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        status: Optional[str] = "all",
+        status: Optional[str] = "pending",
     ) -> List[Dict[str, Any]]:
-        # 1. Primary: Direct native MongoDB query (works standalone on Linux VPS, Docker, Windows)
         try:
-            native_calls = db.fetch_crm_missed_calls(start_date, end_date, status)
-            if native_calls:
-                return self._enrich_with_ai_disposition(native_calls)
+            return db.fetch_crm_missed_calls(start_date, end_date, status)
         except Exception as exc:
             logger.warning(f"Native MongoDB CRM fetch failed: {exc}")
-
-        # 2. Fallback: Node crm_service.cjs (if local realestate workflow exists)
-        script_path = BACKEND_DIR / "crm_service.cjs"
-        cmd = ["node", str(script_path), start_date or "", end_date or "", status or "all"]
-        try:
-            res = subprocess.run(cmd, cwd=str(BACKEND_DIR), capture_output=True, text=True, timeout=25, env=os.environ.copy())
-            if res.returncode == 0 and res.stdout.strip():
-                data = json.loads(res.stdout.strip())
-                calls = data.get("calls", []) if isinstance(data, dict) else data
-                return self._enrich_with_ai_disposition(calls)
-            logger.warning(f"CRM fetch non-zero exit ({res.returncode}): {res.stderr}")
-        except Exception as exc:
-            logger.error(f"CRM pending fetch failed: {exc}")
-        return []
+            return []
 
     # Queue a list of leads for outbound calling
     def queue_leads(

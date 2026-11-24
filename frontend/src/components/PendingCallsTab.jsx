@@ -601,51 +601,39 @@ export default function PendingCallsTab({
                   className="w-3.5 h-3.5 rounded border-input text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
                 />
               </TableHead>
-              <TableHead className="w-7 px-1.5 py-1 text-muted-foreground font-mono text-[10px]">#</TableHead>
-              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Customer Number</TableHead>
-              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Customer Name</TableHead>
-              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Marketing Source</TableHead>
-              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Missed Agent</TableHead>
-              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Missed Time</TableHead>
-              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">Ring</TableHead>
-              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">CRM Status</TableHead>
-              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">CRM Disposition</TableHead>
-              <TableHead className="px-2.5 py-1 whitespace-nowrap text-xs">AI Disposition</TableHead>
-              <TableHead className="px-2.5 py-1 text-right whitespace-nowrap text-xs">Action</TableHead>
+              <TableHead className="w-8 px-2 py-1 text-muted-foreground font-mono text-[10px]">#</TableHead>
+              <TableHead className="px-3 py-1.5 whitespace-nowrap text-xs font-semibold">Phone Number</TableHead>
+              <TableHead className="px-3 py-1.5 whitespace-nowrap text-xs font-semibold">Name</TableHead>
+              <TableHead className="px-3 py-1.5 whitespace-nowrap text-xs font-semibold">Date</TableHead>
+              <TableHead className="px-3 py-1.5 text-right whitespace-nowrap text-xs font-semibold">Action</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoadingCrm ? (
               <TableRow>
-                <TableCell colSpan={12} className="text-center text-muted-foreground py-12">
+                <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
                   <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
                   <span className="font-medium text-xs">Querying MongoDB CRM for inbound missed leads...</span>
                 </TableCell>
               </TableRow>
             ) : crmError ? (
               <TableRow>
-                <TableCell colSpan={12} className="text-center text-rose-600 py-8 bg-rose-50/40">
+                <TableCell colSpan={6} className="text-center text-rose-600 py-8 bg-rose-50/40">
                   <span className="font-semibold text-xs">Failed to load calls from CRM: {crmError}</span>
                 </TableCell>
               </TableRow>
             ) : filteredCalls.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={12} className="text-center text-muted-foreground py-12">
+                <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
                   <span className="text-xs font-medium">
                     {crmCalls.length === 0
-                      ? "Click 'Fetch Calls' above to load pending leads from CRM."
-                      : 'No calls match the current search or AI disposition filter.'}
+                      ? "Click 'Fetch' above to load pending leads from CRM."
+                      : 'No calls match the current search filter.'}
                   </span>
                 </TableCell>
               </TableRow>
             ) : (
               filteredCalls.map((c, idx) => {
-                const timeStr = c.createdAt
-                  ? new Date(c.createdAt).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })
-                  : '--';
                 const isChecked = !deselectedPhones.has(c.phone_number);
 
                 return (
@@ -653,7 +641,7 @@ export default function PendingCallsTab({
                     key={c.id || idx}
                     className={isChecked ? 'bg-[#008792]/5' : ''}
                   >
-                    <TableCell className="w-8 px-2 py-1.5">
+                    <TableCell className="w-8 px-2 py-2">
                       <input
                         type="checkbox"
                         checked={isChecked}
@@ -661,63 +649,19 @@ export default function PendingCallsTab({
                         className="w-3.5 h-3.5 rounded border-input text-[#008792] focus:ring-0 cursor-pointer accent-[#008792]"
                       />
                     </TableCell>
-                    <TableCell className="w-7 px-1.5 py-1.5 font-mono text-[10px] text-muted-foreground whitespace-nowrap">
+                    <TableCell className="w-8 px-2 py-2 font-mono text-[11px] text-muted-foreground whitespace-nowrap">
                       {idx + 1}
                     </TableCell>
-                    <TableCell className="px-2.5 py-1.5 font-mono text-xs font-semibold text-foreground whitespace-nowrap">
+                    <TableCell className="px-3 py-2 font-mono text-xs font-semibold text-foreground whitespace-nowrap">
                       {c.phone_number}
                     </TableCell>
-                    <TableCell className="px-2.5 py-1.5 font-medium text-foreground whitespace-nowrap text-xs">
+                    <TableCell className="px-3 py-2 font-medium text-foreground whitespace-nowrap text-xs">
                       {c.customer_name || '--'}
                     </TableCell>
-                    <TableCell className="px-2.5 py-1.5 text-muted-foreground whitespace-nowrap">
-                      <span className="text-[11px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                        {c.source || c.campaign || '--'}
-                      </span>
+                    <TableCell className="px-3 py-2 font-mono text-muted-foreground whitespace-nowrap text-xs">
+                      {c.date || c.createdAt || '--'}
                     </TableCell>
-                    <TableCell className="px-2.5 py-1.5 text-muted-foreground whitespace-nowrap text-xs">
-                      {(c.missedAgents && c.missedAgents[0]) || 'Queue'}
-                    </TableCell>
-                    <TableCell className="px-2.5 py-1.5 font-mono text-muted-foreground whitespace-nowrap text-xs">
-                      {timeStr}
-                    </TableCell>
-                    <TableCell className="px-2.5 py-1.5 font-mono text-muted-foreground whitespace-nowrap text-xs">
-                      {c.duration || 0}s
-                    </TableCell>
-                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
-                      <span
-                        className={cn(
-                          "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border",
-                          c.status === 'resolved' || c.status === 'called'
-                            ? 'border-border bg-muted/40 text-muted-foreground'
-                            : c.status === 'attempted'
-                            ? 'border-amber-500/30 bg-amber-50 text-amber-700'
-                            : 'border-emerald-500/30 bg-emerald-50 text-emerald-700'
-                        )}
-                      >
-                        {c.status === 'resolved' || c.status === 'called' ? 'Resolved' : c.status === 'attempted' ? 'Attempted' : 'Pending'}
-                      </span>
-                    </TableCell>
-                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
-                      {c.crm_disposition ? (
-                        <div className="flex items-center gap-1">
-                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-foreground">
-                            {c.crm_disposition}
-                          </span>
-                          {c.crm_callback_agent && (
-                            <span className="text-[9px] text-muted-foreground font-mono">
-                              ({c.crm_callback_agent})
-                            </span>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">--</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
-                      {renderAiBadge(c)}
-                    </TableCell>
-                    <TableCell className="px-2.5 py-1.5 text-right whitespace-nowrap">
+                    <TableCell className="px-3 py-2 text-right whitespace-nowrap">
                       <Button
                         size="xs"
                         variant="outline"
