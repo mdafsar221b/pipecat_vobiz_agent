@@ -336,6 +336,7 @@ def record_call_start(
     now_utc = datetime.now(timezone.utc)
     ist_dt = now_utc + IST_OFFSET
     meta = metadata or {}
+    operator_name = meta.get("created_by") or meta.get("operator") or meta.get("initiated_by") or ""
     did_num = re.sub(r"\D", "", meta.get("From") or "918071583794")
     digits = re.sub(r"\D", "", str(phone_number))
     ten_digit = digits[-10:] if len(digits) >= 10 else digits
@@ -370,6 +371,8 @@ def record_call_start(
         "campaignId": batch_id or "BATCH-VOBIZ-AI",
         "batchId": batch_id,
         "batch_id": batch_id,
+        "initiatedBy": operator_name,
+        "createdBy": operator_name,
         "queueName": "",
         "queueWaitDuration": 0,
         "callDate": ist_dt.strftime("%Y-%m-%d"),
@@ -702,7 +705,6 @@ def sync_ai_resolution_to_telephony_calls(
                     "callbackCallId": ai_call_id,
                     "callbackTimestamp": now_utc,
                     "isAiResolved": True,
-                    "resolvedByAi": True,
                     "callbackAgentName": "Ananya",
                     "aiDisposition": disposition,
                 },

@@ -13,9 +13,27 @@ import BatchesTab from './components/BatchesTab';
 import CompletedLogsTab from './components/CompletedLogsTab';
 import TemplatesTab from './components/TemplatesTab';
 import ErrorBoundary from './components/ErrorBoundary';
+import LoginModal from './components/LoginModal';
+import { LogOut, User as UserIcon } from 'lucide-react';
+import { Button } from './components/ui/button';
 
 // Main Swargaseema AI Telephony Console Application with full-width Left Sidebar Layout
 export default function App() {
+  // Operator Authentication State
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const stored = localStorage.getItem('swargaseema_user');
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const handleLogout = () => {
+    localStorage.removeItem('swargaseema_token');
+    localStorage.removeItem('swargaseema_user');
+    setCurrentUser(null);
+  };
   const [activeNav, setActiveNav] = useState('live');
   const [alertMessage, setAlertMessage] = useState('');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
@@ -356,10 +374,14 @@ export default function App() {
 
   const handleQueueLeads = async (payload) => {
     try {
+      const enrichedPayload = {
+        ...payload,
+        created_by: currentUser?.displayName || currentUser?.username || 'Operator',
+      };
       const res = await fetch('/api/campaign/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(enrichedPayload),
       });
       const data = await res.json();
       if (data.ok) {
@@ -444,6 +466,27 @@ export default function App() {
                   </button>
                 )}
               </div>
+
+              {currentUser && (
+                <>
+                  <Separator orientation="vertical" className="h-4" />
+                  <div className="flex items-center gap-1.5 pl-1">
+                    <div className="flex items-center gap-1 text-xs font-medium text-foreground bg-muted/50 px-2 py-1 rounded border border-border">
+                      <UserIcon className="w-3 h-3 text-[#008792]" />
+                      <span>{currentUser.displayName || currentUser.username}</span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={handleLogout}
+                      title="Logout"
+                      className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
           </header>
 
@@ -561,6 +604,7 @@ export default function App() {
           </div>
         </SidebarInset>
       </SidebarProvider>
+      {!currentUser && <LoginModal onLoginSuccess={(u) => setCurrentUser(u)} />}
     </TooltipProvider>
   );
 }

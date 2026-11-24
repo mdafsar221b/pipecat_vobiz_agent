@@ -124,6 +124,49 @@ async def serve_ui():
         return HTMLResponse(content=FRONTEND_INDEX.read_text(encoding="utf-8"))
     return HTMLResponse(content="<h1>Frontend build not found. Run 'npm run build' in frontend directory.</h1>", status_code=404)
 
+# Parse configured operators from APP_USERS env
+def get_auth_users() -> Dict[str, Dict[str, str]]:
+    raw = os.getenv("APP_USERS", "")
+    users = {}
+    for entry in raw.split(","):
+        parts = entry.strip().split(":")
+        if len(parts) >= 2:
+            uname = parts[0].strip().lower()
+            pwd = parts[1].strip()
+            dname = parts[2].strip() if len(parts) >= 3 else uname.title()
+            users[uname] = {"password": pwd, "displayName": dname}
+    return users
+
+# Authenticate user credentials
+@app.post("/api/auth/login")
+async def login(request: Request):
+    payload = await parse_params(request)
+    logger.info(f"Login request payload: {payload}")
+    username = str(payload.get("username", "")).strip().lower()
+    password = str(payload.get("password", "")).strip()
+
+    users = get_auth_users()
+    logger.info(f"Available auth users: {list(users.keys())}")
+    if not users:
+        # Fallback default if not configured
+        if username == "admin" and password == "admin":
+            return {"ok": True, "token": "session_admin", "user": {"username": "admin", "displayName": "Admin"}}
+        return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid credentials"})
+
+    user = users.get(username)
+    if not user or user["password"] != password:
+        return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid username or password"})
+
+    token = f"sess_{username}_{int(time.time())}"
+    return {
+        "ok": True,
+        "token": token,
+        "user": {
+            "username": username,
+            "displayName": user["displayName"],
+        },
+    }
+
 # Health status endpoint
 @app.get("/health")
 async def health_check():
