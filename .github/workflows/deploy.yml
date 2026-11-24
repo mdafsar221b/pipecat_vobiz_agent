@@ -58,6 +58,7 @@ jobs:
           port: 22
           script: |
             set -e
+            export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
             cd /home/github-deploy/apps/pipecat_vobiz_agent
             git fetch origin main
             git reset --hard origin/main
