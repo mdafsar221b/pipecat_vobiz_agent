@@ -81,7 +81,7 @@ export function detectColumnMapping(headers = []) {
   // Detect Phone
   mapping.phone =
     cleanHeaders.find((h) =>
-      /^(phone|mobile|cell|contact|number|telephony|caller_number|customer_phone|phone_number|ph|mobile_no|phone_no|contact_no)$/i.test(h)
+      /^(phone|mobile|cell|contact|number|telephony|caller_number|customer_phone|phone_number|ph|mobile_no|phone_no|contact_no|mobile_number)$/i.test(h)
     ) ||
     cleanHeaders.find((h) => /phone|mobile|cell|contact/i.test(h)) ||
     cleanHeaders.find((h) => /number|no\b/i.test(h)) ||
@@ -92,15 +92,16 @@ export function detectColumnMapping(headers = []) {
     cleanHeaders.find((h) =>
       /^(name|customer|customer_name|contact_name|lead_name|full_name|caller|caller_name|client|lead)$/i.test(h)
     ) ||
-    cleanHeaders.find((h) => /name|customer|caller|client/i.test(h)) ||
+    cleanHeaders.find((h) => /customer_name|client_name|full_name/i.test(h)) ||
+    cleanHeaders.find((h) => /^name$|customer/i.test(h)) ||
     '';
 
   // Detect Source
   mapping.source =
     cleanHeaders.find((h) =>
-      /^(source|lead_source|campaign|channel|origin|source_filter|platform)$/i.test(h)
+      /^(source|lead_source|campaign|channel|channel_name|origin|source_filter|platform)$/i.test(h)
     ) ||
-    cleanHeaders.find((h) => /source|campaign|channel/i.test(h)) ||
+    cleanHeaders.find((h) => /channel|source|campaign/i.test(h)) ||
     '';
 
   // Detect Status
@@ -114,9 +115,9 @@ export function detectColumnMapping(headers = []) {
   // Detect Notes / Disposition / Remarks
   mapping.notes =
     cleanHeaders.find((h) =>
-      /^(disposition|crm_disposition|outcome|result|notes|remark|remarks|reason|comment|comments|message)$/i.test(h)
+      /^(call_disposition|disposition|crm_disposition|outcome|result|notes|remark|remarks|reason|comment|comments|message)$/i.test(h)
     ) ||
-    cleanHeaders.find((h) => /disposition|outcome|remark|note|reason/i.test(h)) ||
+    cleanHeaders.find((h) => /call_disposition|disposition|outcome|remark|note|reason/i.test(h)) ||
     '';
 
   // Detect Date / Time

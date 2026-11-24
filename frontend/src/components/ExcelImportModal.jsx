@@ -59,6 +59,15 @@ export default function ExcelImportModal({
   const [batchName, setBatchName] = useState('');
   const [templateId, setTemplateId] = useState(selectedTemplateId);
 
+  // Disposition filter & Slicing states
+  const [selectedDispositions, setSelectedDispositions] = useState([]);
+  const [dispSearch, setDispSearch] = useState('');
+  const [sliceMode, setSliceMode] = useState('all'); // 'all' | 'count' | 'range'
+  const [sliceCount, setSliceCount] = useState(100);
+  const [rangeStart, setRangeStart] = useState(1);
+  const [rangeEnd, setRangeEnd] = useState(100);
+  const [runImmediately, setRunImmediately] = useState(false);
+
   // Check if a queue is currently running or has pending calls
   const isDialerRunning = Boolean(campaignData?.is_running);
   const pendingCount = campaignData?.pending_count || campaignData?.counts?.pending || 0;
@@ -80,6 +89,13 @@ export default function ExcelImportModal({
     setMapping({});
     setIsSubmitting(false);
     setBatchName('');
+    setSelectedDispositions([]);
+    setDispSearch('');
+    setSliceMode('all');
+    setSliceCount(100);
+    setRangeStart(1);
+    setRangeEnd(100);
+    setRunImmediately(false);
     setQueueStrategy('append');
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -132,6 +148,69 @@ export default function ExcelImportModal({
     return normalizeLeadRows(parsedData.rows, mapping);
   }, [parsedData, mapping]);
 
+  // Extract distinct dispositions from mapped disposition column
+  const availableDispositions = useMemo(() => {
+    if (!parsedData?.rows || !mapping.notes) return [];
+    const counts = {};
+    for (const row of parsedData.rows) {
+      const val = String(row[mapping.notes] || '').trim();
+      if (val) {
+        counts[val] = (counts[val] || 0) + 1;
+      }
+    }
+    return Object.entries(counts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [parsedData, mapping.notes]);
+
+  // Apply disposition filtering and slicing
+  const filteredLeads = useMemo(() => {
+    let list = [...normalized.validLeads];
+
+    // Filter by selected dispositions (if any selected)
+    if (selectedDispositions.length > 0) {
+      const selSet = new Set(selectedDispositions);
+      list = list.filter((l) => {
+        const rawDisp = String(l.rawRow?.[mapping.notes] || l.crm_disposition || '').trim();
+        return selSet.has(rawDisp);
+      });
+    }
+
+    // Apply slice or range
+    if (sliceMode === 'count' && sliceCount > 0) {
+      list = list.slice(0, Number(sliceCount));
+    } else if (sliceMode === 'range') {
+      const start = Math.max(0, Number(rangeStart) - 1);
+      const end = Math.max(start, Number(rangeEnd));
+      list = list.slice(start, end);
+    }
+
+    return list;
+  }, [normalized.validLeads, selectedDispositions, sliceMode, sliceCount, rangeStart, rangeEnd, mapping.notes]);
+
+  // Toggle single disposition filter
+  const toggleDisposition = (disp) => {
+    setSelectedDispositions((prev) =>
+      prev.includes(disp) ? prev.filter((d) => d !== disp) : [...prev, disp]
+    );
+  };
+
+  // Toggle select all dispositions
+  const toggleSelectAllDispositions = () => {
+    if (selectedDispositions.length === availableDispositions.length) {
+      setSelectedDispositions([]);
+    } else {
+      setSelectedDispositions(availableDispositions.map((d) => d.name));
+    }
+  };
+
+  // Filtered available dispositions for search
+  const visibleDispositions = useMemo(() => {
+    if (!dispSearch.trim()) return availableDispositions;
+    const q = dispSearch.trim().toLowerCase();
+    return availableDispositions.filter((d) => d.name.toLowerCase().includes(q));
+  }, [availableDispositions, dispSearch]);
+
   // Handle Mapping Field Change
   const updateMapping = (field, colName) => {
     setMapping((prev) => ({
@@ -141,9 +220,9 @@ export default function ExcelImportModal({
   };
 
   // Execute Import
-  const handleConfirmImport = async () => {
-    if (!normalized.validLeads.length) {
-      alert('No valid phone numbers found in the file with the current mapping.');
+  const handleConfirmImport = async (shouldStartImmediately = false) => {
+    if (!filteredLeads.length) {
+      alert('No matching valid leads found with current filters and slice range.');
       return;
     }
 
@@ -151,7 +230,7 @@ export default function ExcelImportModal({
     try {
       if (mode === 'crm' && importAction === 'add_to_list') {
         // Add directly to current CRM list
-        const crmRecords = normalized.validLeads.map((l) => ({
+        const crmRecords = filteredLeads.map((l) => ({
           phone_number: l.phone_number,
           customer_name: l.customer_name,
           source: l.source || `Excel: ${file?.name || 'Import'}`,
@@ -166,7 +245,7 @@ export default function ExcelImportModal({
         handleOpenChange(false);
       } else {
         // Queue as Campaign Batch to Outbound Dialer
-        const leads = normalized.validLeads.map((l) => ({
+        const leads = filteredLeads.map((l) => ({
           phone_number: l.phone_number,
           customer_name: l.customer_name,
           source: l.source || `Excel: ${file?.name || 'Batch'}`,
@@ -185,16 +264,12 @@ export default function ExcelImportModal({
         await onQueueLeads({
           leads,
           batch_name: finalBatchName,
-          source_filter: `Excel Import: ${file?.name || 'Upload'}`,
+          source_filter: `Excel Import: ${file?.name || 'Upload'}${selectedDispositions.length ? ` (${selectedDispositions.join(', ')})` : ''}`,
           template_id: templateId,
           append: shouldAppend,
+          start_immediately: Boolean(shouldStartImmediately),
         });
 
-        alert(
-          shouldAppend
-            ? `Successfully appended ${leads.length} leads to the running queue without interruption!`
-            : `Successfully queued ${leads.length} leads into campaign batch "${finalBatchName}"!`
-        );
         handleOpenChange(false);
       }
     } catch (err) {
@@ -428,6 +503,193 @@ export default function ExcelImportModal({
                 </div>
               </div>
 
+              {/* Disposition Filter & Lead Slicing Section */}
+              <div className="p-3 bg-muted/20 border border-border rounded-lg space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="text-xs font-bold text-foreground block">
+                      Lead Filters & Batch Sizing
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      Filter by disposition or select slice range
+                    </span>
+                  </div>
+                  <Badge variant="outline" className="font-mono text-xs text-[#008792] border-[#008792]/30 bg-[#008792]/5">
+                    {filteredLeads.length} leads selected
+                  </Badge>
+                </div>
+
+                {/* Disposition Checkboxes */}
+                {availableDispositions.length > 0 && (
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-semibold text-foreground">
+                          Disposition Filters ({availableDispositions.length})
+                        </span>
+                        {selectedDispositions.length > 0 && (
+                          <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-[#008792]/10 text-[#008792]">
+                            {selectedDispositions.length} selected
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="text"
+                          placeholder="Search disposition..."
+                          value={dispSearch}
+                          onChange={(e) => setDispSearch(e.target.value)}
+                          className="h-5 w-32 px-1.5 text-[10px] rounded border border-input bg-background outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={toggleSelectAllDispositions}
+                          className="text-[11px] font-medium text-[#008792] hover:underline cursor-pointer"
+                        >
+                          {selectedDispositions.length === availableDispositions.length ? 'Clear All' : 'Select All'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-1.5 bg-background border border-border rounded-md">
+                      {visibleDispositions.map((d) => {
+                        const isSelected = selectedDispositions.includes(d.name);
+                        return (
+                          <button
+                            type="button"
+                            key={d.name}
+                            onClick={() => toggleDisposition(d.name)}
+                            className={cn(
+                              'px-2 py-0.5 rounded text-[11px] font-medium border transition-colors flex items-center gap-1 select-none cursor-pointer',
+                              isSelected
+                                ? 'bg-[#008792] text-white border-[#008792]'
+                                : 'bg-muted/40 text-muted-foreground border-border hover:bg-muted/70'
+                            )}
+                          >
+                            <span>{d.name}</span>
+                            <span className={cn('text-[10px] font-mono opacity-80', isSelected ? 'text-white' : 'text-muted-foreground')}>
+                              ({d.count})
+                            </span>
+                          </button>
+                        );
+                      })}
+                      {visibleDispositions.length === 0 && (
+                        <span className="text-[11px] text-muted-foreground p-1">No matching dispositions found.</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Lead Slicing / Count Selector */}
+                <div className="space-y-1.5 pt-1 border-t border-border/60">
+                  <span className="text-[11px] font-semibold text-foreground block">
+                    Lead Slicing / Batch Size
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <label
+                      onClick={() => setSliceMode('all')}
+                      className={cn(
+                        'p-2 rounded border cursor-pointer flex items-center gap-1.5 text-xs transition',
+                        sliceMode === 'all'
+                          ? 'border-[#008792] bg-[#008792]/5 font-semibold text-foreground'
+                          : 'border-border bg-card text-muted-foreground'
+                      )}
+                    >
+                      <input
+                        type="radio"
+                        name="sliceMode"
+                        checked={sliceMode === 'all'}
+                        onChange={() => setSliceMode('all')}
+                      />
+                      <span>All Matching</span>
+                    </label>
+
+                    <label
+                      onClick={() => setSliceMode('count')}
+                      className={cn(
+                        'p-2 rounded border cursor-pointer flex items-center gap-1.5 text-xs transition',
+                        sliceMode === 'count'
+                          ? 'border-[#008792] bg-[#008792]/5 font-semibold text-foreground'
+                          : 'border-border bg-card text-muted-foreground'
+                      )}
+                    >
+                      <input
+                        type="radio"
+                        name="sliceMode"
+                        checked={sliceMode === 'count'}
+                        onChange={() => setSliceMode('count')}
+                      />
+                      <span>First N Leads</span>
+                    </label>
+
+                    <label
+                      onClick={() => setSliceMode('range')}
+                      className={cn(
+                        'p-2 rounded border cursor-pointer flex items-center gap-1.5 text-xs transition',
+                        sliceMode === 'range'
+                          ? 'border-[#008792] bg-[#008792]/5 font-semibold text-foreground'
+                          : 'border-border bg-card text-muted-foreground'
+                      )}
+                    >
+                      <input
+                        type="radio"
+                        name="sliceMode"
+                        checked={sliceMode === 'range'}
+                        onChange={() => setSliceMode('range')}
+                      />
+                      <span>Row Range</span>
+                    </label>
+                  </div>
+
+                  {/* Slicing Inputs */}
+                  {sliceMode === 'count' && (
+                    <div className="flex items-center gap-2 pt-1">
+                      <span className="text-[11px] text-muted-foreground">Take first:</span>
+                      {[25, 50, 100, 150].map((preset) => (
+                        <Button
+                          key={preset}
+                          type="button"
+                          size="xs"
+                          variant={sliceCount === preset ? 'default' : 'outline'}
+                          onClick={() => setSliceCount(preset)}
+                          className={cn('h-6 px-2 text-xs', sliceCount === preset && 'bg-[#008792] text-white')}
+                        >
+                          {preset}
+                        </Button>
+                      ))}
+                      <input
+                        type="number"
+                        min="1"
+                        value={sliceCount}
+                        onChange={(e) => setSliceCount(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-20 h-6 px-2 text-xs font-mono border border-input rounded bg-background"
+                      />
+                      <span className="text-[11px] text-muted-foreground">leads</span>
+                    </div>
+                  )}
+
+                  {sliceMode === 'range' && (
+                    <div className="flex items-center gap-2 pt-1 text-xs">
+                      <span className="text-[11px] text-muted-foreground">From row:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        value={rangeStart}
+                        onChange={(e) => setRangeStart(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-16 h-6 px-2 text-xs font-mono border border-input rounded bg-background"
+                      />
+                      <span className="text-[11px] text-muted-foreground">to row:</span>
+                      <input
+                        type="number"
+                        min={rangeStart}
+                        value={rangeEnd}
+                        onChange={(e) => setRangeEnd(Math.max(rangeStart, parseInt(e.target.value) || rangeStart))}
+                        className="w-16 h-6 px-2 text-xs font-mono border border-input rounded bg-background"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* Data Preview Table */}
               <div className="space-y-1.5">
                 <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider block">
@@ -629,7 +891,7 @@ export default function ExcelImportModal({
           )}
         </div>
 
-        <DialogFooter className="gap-2 sm:gap-0 pt-3 border-t border-border/70">
+        <DialogFooter className="flex-wrap items-center justify-between gap-2 pt-3 border-t border-border/70">
           <Button
             type="button"
             variant="outline"
@@ -642,31 +904,40 @@ export default function ExcelImportModal({
           </Button>
 
           {parsedData && (
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleConfirmImport}
-              disabled={isSubmitting || normalized.validLeads.length === 0}
-              className="text-xs h-8 gap-1.5 bg-[#008792] hover:bg-[#007680] text-white font-semibold cursor-pointer"
-            >
-              {isSubmitting ? (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Processing...</span>
-                </>
-              ) : (
-                <>
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>
-                    {mode === 'crm' && importAction === 'add_to_list'
-                      ? `Add ${normalized.validLeads.length} Leads to CRM`
-                      : hasRunningQueue && queueStrategy === 'append'
-                      ? `Append ${normalized.validLeads.length} Leads to Queue`
-                      : `Launch Batch (${normalized.validLeads.length} Calls)`}
-                  </span>
-                </>
-              )}
-            </Button>
+            <div className="flex items-center gap-2">
+              {/* Option 1: Save batch only without redirecting to dialer */}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => handleConfirmImport(false)}
+                disabled={isSubmitting || filteredLeads.length === 0}
+                className="text-xs h-8 gap-1.5 border-[#008792] text-[#008792] hover:bg-[#008792]/10 font-semibold cursor-pointer"
+                title="Save batch to Campaign Batches without redirecting to live dialer"
+              >
+                {isSubmitting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                <span>Save Batch ({filteredLeads.length})</span>
+              </Button>
+
+              {/* Option 2: Queue and run immediately */}
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => handleConfirmImport(true)}
+                disabled={isSubmitting || filteredLeads.length === 0}
+                className="text-xs h-8 gap-1.5 bg-[#008792] hover:bg-[#007680] text-white font-semibold cursor-pointer shadow-sm"
+                title="Queue leads and open Live Dialer to begin calling immediately"
+              >
+                {isSubmitting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Processing...</span>
+                  </>
+                ) : (
+                  <span>Queue & Start Now ({filteredLeads.length})</span>
+                )}
+              </Button>
+            </div>
           )}
         </DialogFooter>
       </DialogContent>

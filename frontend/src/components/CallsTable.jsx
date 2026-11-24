@@ -65,7 +65,29 @@ export default function CallsTable({
   containerClassName = 'max-h-[calc(100vh-220px)]',
 }) {
   const [inspectingCall, setInspectingCall] = useState(null);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [activeDrawerTab, setActiveDrawerTab] = useState('transcript');
+
+  const handleOpenInspect = async (callWithOverrides) => {
+    setInspectingCall(callWithOverrides);
+    const uuid = callWithOverrides.call_uuid || callWithOverrides.callId || callWithOverrides.uuid;
+    if (uuid && (!callWithOverrides.turns?.length && !callWithOverrides.transcripts?.length)) {
+      setIsLoadingDetail(true);
+      try {
+        const res = await fetch(`/api/calls/${encodeURIComponent(uuid)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.ok && data.call) {
+            setInspectingCall((prev) => (prev && (prev.call_uuid === uuid || prev.callId === uuid) ? { ...prev, ...data.call } : prev));
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load call detail:", err);
+      } finally {
+        setIsLoadingDetail(false);
+      }
+    }
+  };
 
   // Inline audio player state
   const [playingUuid, setPlayingUuid] = useState(null);
@@ -251,7 +273,7 @@ export default function CallsTable({
                   String(callUuid).slice(0, 12);
 
                 const recEvent = (entry.events || []).find((e) => e.kind === 'recording');
-                const recUrl = entry.recording_url || (recEvent ? recEvent.recording_url || recEvent.params?.RecordUrl : '');
+                const recUrl = entry.recordingUrl || entry.recording_url || (recEvent ? recEvent.recording_url || recEvent.params?.RecordUrl : '');
                 const hangupEvent = (entry.events || []).find((e) => e.kind === 'hangup');
                 const rawDuration =
                   entry.duration !== undefined && entry.duration !== null && entry.duration > 0
@@ -277,7 +299,7 @@ export default function CallsTable({
                 return (
                   <TableRow
                     key={callUuid}
-                    onClick={() => setInspectingCall(callWithOverrides)}
+                    onClick={() => handleOpenInspect(callWithOverrides)}
                     className={cn(
                       "cursor-pointer transition-colors hover:bg-muted/40",
                       isChecked && "bg-[#008792]/5",
@@ -426,7 +448,7 @@ export default function CallsTable({
         <DrawerContent className="p-0 border-l border-border bg-background flex flex-col h-full max-h-screen">
           {inspectingCall && (() => {
             const recEv = (inspectingCall.events || []).find((e) => e.kind === 'recording');
-            const recUrl = inspectingCall.recording_url || (recEv ? recEv.recording_url || recEv.params?.RecordUrl : '');
+            const recUrl = inspectingCall.recordingUrl || inspectingCall.recording_url || (recEv ? recEv.recording_url || recEv.params?.RecordUrl : '');
             const hEvent = (inspectingCall.events || []).find((e) => e.kind === 'hangup');
             const durSec = Number(
               inspectingCall.duration !== undefined && inspectingCall.duration !== null && inspectingCall.duration > 0
@@ -454,8 +476,17 @@ export default function CallsTable({
             const custName = overrides.customer_name !== undefined ? overrides.customer_name : (inspectingCall.customer_name || '');
             const callForEdit = { ...inspectingCall, ...overrides, disposition: effectiveDisp, callback_time: cbTime, customer_name: custName };
             const hasRec = Boolean(recUrl || (durSec > 5 && (inB > 0 || outB > 0)));
-            const turns = inspectingCall.turns || [];
-            const events = inspectingCall.events || [];
+            const turns = (inspectingCall.transcripts && inspectingCall.transcripts.length > 0)
+              ? inspectingCall.transcripts
+              : (inspectingCall.turns || []);
+            const rawFlow = inspectingCall.callFlow || inspectingCall.events || [];
+            const events = rawFlow.map((ev) => ({
+              kind: ev.type || ev.event || ev.kind || 'event',
+              time_epoch: ev.time || ev.time_epoch || 0,
+              timestamp: ev.timestamp || '',
+              details: ev.details || ev.params || {},
+              params: ev.params || ev.details || {},
+            }));
 
             return (
               <div className="flex flex-col h-full overflow-hidden">
@@ -708,7 +739,7 @@ export default function CallsTable({
                                   <span className="absolute -left-[14px] top-1.5 w-2 h-2 rounded-full bg-[#008792] ring-2 ring-background" />
                                   <div className="flex items-baseline justify-between gap-2">
                                     <div className="font-semibold text-foreground">
-                                      <span>{ev.event}</span>
+                                      <span>{ev.event || ev.type || ev.kind}</span>
                                       {note && (
                                         <span className="text-[11px] font-normal text-muted-foreground ml-2">
                                           ({note})

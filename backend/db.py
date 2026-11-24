@@ -1049,10 +1049,10 @@ def get_batch_metrics(batch_id: str) -> Dict[str, int]:
     }
     if col is not None and batch_id:
         try:
-            calls = list(col.find({"batch_id": batch_id}, {"disposition": 1, "_id": 0}))
+            calls = list(col.find({"$or": [{"batch_id": batch_id}, {"campaignId": batch_id}]}, {"disposition": 1, "rawDisposition": 1, "_id": 0}))
             metrics["dialed"] = len(calls)
             for c in calls:
-                disp = c.get("disposition")
+                disp = str(c.get("rawDisposition") or c.get("disposition") or "").strip().lower().replace(" ", "_")
                 if disp == "interested":
                     metrics["interested"] += 1
                 elif disp in ("not_interested", "declined"):
@@ -1083,15 +1083,25 @@ def get_batches() -> List[Dict[str, Any]]:
         try:
             pipeline = [
                 {
+                    "$project": {
+                        "batch_id": 1,
+                        "disp": {
+                            "$toLower": {
+                                "$ifNull": ["$rawDisposition", "$disposition"]
+                            }
+                        }
+                    }
+                },
+                {
                     "$group": {
                         "_id": "$batch_id",
                         "dialed": {"$sum": 1},
-                        "interested": {"$sum": {"$cond": [{"$eq": [{"$toLower": "$rawDisposition"}, "interested"]}, 1, 0]}},
-                        "not_interested": {"$sum": {"$cond": [{"$in": [{"$toLower": "$rawDisposition"}, ["not_interested", "declined"]]}, 1, 0]}},
-                        "wrong_number": {"$sum": {"$cond": [{"$eq": [{"$toLower": "$rawDisposition"}, "wrong_number"]}, 1, 0]}},
-                        "not_talking": {"$sum": {"$cond": [{"$eq": [{"$toLower": "$rawDisposition"}, "not_talking"]}, 1, 0]}},
-                        "no_answer": {"$sum": {"$cond": [{"$in": [{"$toLower": "$rawDisposition"}, ["no_answer", "busy", "failed"]]}, 1, 0]}},
-                        "dropped": {"$sum": {"$cond": [{"$in": [{"$toLower": "$rawDisposition"}, ["dropped", "system_error", "inquiry_drop"]]}, 1, 0]}},
+                        "interested": {"$sum": {"$cond": [{"$in": ["$disp", ["interested"]]}, 1, 0]}},
+                        "not_interested": {"$sum": {"$cond": [{"$in": ["$disp", ["not_interested", "not interested", "declined"]]}, 1, 0]}},
+                        "wrong_number": {"$sum": {"$cond": [{"$in": ["$disp", ["wrong_number", "wrong number"]]}, 1, 0]}},
+                        "not_talking": {"$sum": {"$cond": [{"$in": ["$disp", ["not_talking", "not talking"]]}, 1, 0]}},
+                        "no_answer": {"$sum": {"$cond": [{"$in": ["$disp", ["no_answer", "no answer", "busy", "failed"]]}, 1, 0]}},
+                        "dropped": {"$sum": {"$cond": [{"$in": ["$disp", ["dropped", "system_error", "inquiry_drop", "inquiry drop"]]}, 1, 0]}},
                     }
                 }
             ]
@@ -1139,6 +1149,7 @@ def get_batch_detail(batch_id: str) -> Dict[str, Any]:
         batch_doc["metrics"] = m
 
     calls: List[Dict[str, Any]] = []
+    dialed_numbers = set()
     if c_col is not None:
         try:
             projection = {
@@ -1155,13 +1166,46 @@ def get_batch_detail(batch_id: str) -> Dict[str, Any]:
                 c["ended"] = c.get("ended_at", "")
                 c["diagnostic"] = c.get("diagnostic") or {}
                 c["audio_metrics"] = c.get("audio_metrics") or {}
+                if not c.get("recording_url") and c.get("recordingUrl"):
+                    c["recording_url"] = c["recordingUrl"]
                 if not c.get("customer_name"):
                     c["customer_name"] = c.get("customerName") or (c.get("callbackSchedule") or {}).get("customerName") or ""
                 if not c.get("callback_time"):
                     c["callback_time"] = (c.get("callbackSchedule") or {}).get("preferredTime") or ""
+                
+                num = c.get("customerNumber") or c.get("phone_number") or ""
+                digits = re.sub(r"\D", "", str(num))[-10:]
+                if digits:
+                    dialed_numbers.add(digits)
                 calls.append(c)
         except Exception as exc:
             logger.error(f"Failed to query calls for batch {batch_id}: {exc}")
+
+    # Include undialed leads from batch_doc so Total reflects all imported batch records
+    if batch_doc and "leads" in batch_doc and isinstance(batch_doc["leads"], list):
+        for lead in batch_doc["leads"]:
+            raw_phone = str(lead.get("phone_number") or "")
+            digits = re.sub(r"\D", "", raw_phone)[-10:]
+            if digits and digits not in dialed_numbers:
+                calls.append({
+                    "call_uuid": lead.get("id") or f"pending-{digits}",
+                    "callId": lead.get("id") or f"pending-{digits}",
+                    "customerNumber": digits,
+                    "customerNumberRaw": raw_phone if raw_phone.startswith("+") else f"+91{digits}",
+                    "phone_number": raw_phone,
+                    "customer_name": lead.get("customer_name") or "",
+                    "customerName": lead.get("customer_name") or "",
+                    "disposition": "Pending",
+                    "rawDisposition": "pending",
+                    "callStatus": "pending",
+                    "duration": 0,
+                    "duration_seconds": 0,
+                    "talkDuration": 0,
+                    "started": batch_doc.get("created_at", ""),
+                    "created_at": batch_doc.get("created_at", ""),
+                    "status": "pending",
+                })
+                dialed_numbers.add(digits)
 
     return {"batch": batch_doc or {"batch_id": batch_id, "status": "unknown"}, "calls": calls}
 

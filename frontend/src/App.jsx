@@ -29,6 +29,24 @@ export default function App() {
     }
   });
 
+  // Attach active operator to all API requests
+  useEffect(() => {
+    const originalFetch = window.fetch;
+    window.fetch = async (input, init = {}) => {
+      const op = currentUser?.username;
+      if (op) {
+        init.headers = {
+          ...init.headers,
+          'X-Operator': op,
+        };
+      }
+      return originalFetch(input, init);
+    };
+    return () => {
+      window.fetch = originalFetch;
+    };
+  }, [currentUser]);
+
   const handleLogout = () => {
     localStorage.removeItem('swargaseema_token');
     localStorage.removeItem('swargaseema_user');
@@ -388,7 +406,11 @@ export default function App() {
         setAlertMessage('');
         fetchCampaignStatus();
         fetchBatches();
-        setActiveNav('live');
+        // Redirect to Live Dialer only when explicit immediate run requested
+        if (payload.start_immediately) {
+          setActiveNav('live');
+          handleStartCampaign();
+        }
       } else {
         setAlertMessage(`Failed to queue leads: ${data.error}`);
       }

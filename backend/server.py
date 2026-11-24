@@ -60,7 +60,25 @@ import db
 import diagnostics
 import vobiz_api
 from agent import run_vobiz_agent
-from dialer import dialer
+from dialer import dialer, manager as dialer_manager
+
+# Resolve dialer instance for the requesting operator
+def resolve_dialer(request: Optional[Request] = None, operator: Optional[str] = None, call_uuid: Optional[str] = None):
+    if operator and operator.strip():
+        return dialer_manager.get_dialer(operator.strip())
+    if request:
+        op = (
+            request.headers.get("X-Operator")
+            or request.headers.get("x-operator")
+            or request.query_params.get("operator")
+        )
+        if op and op.strip():
+            return dialer_manager.get_dialer(op.strip())
+    if call_uuid:
+        d = dialer_manager.find_dialer_by_call_uuid(call_uuid)
+        if d:
+            return d
+    return dialer
 
 PORT = int(os.getenv("PORT", os.getenv("HTTP_PORT", "8000")))
 STREAM_CONTENT_TYPE = os.getenv("STREAM_CONTENT_TYPE", "audio/x-l16;rate=16000")
@@ -210,11 +228,13 @@ async def answer_call(request: Request):
     call_short = call_uuid[:8] if call_uuid else "unknown"
     logger.info(f"[TIMING] [{call_short}] 1. Call answered at {t_answer:.3f} ({datetime.now().strftime('%H:%M:%S.%f')[:-3]})")
     logger.info(f"Vobiz Answer Callback: call_uuid={call_uuid}, to={to_number}, from={from_number}")
-    active_call_meta = dialer.active_call if (dialer.active_call and (not call_uuid or dialer.active_call.get("call_uuid") == call_uuid)) else {}
+    op = params.get("operator")
+    d = resolve_dialer(request, operator=op, call_uuid=call_uuid)
+    active_call_meta = d.active_call if (d.active_call and (not call_uuid or d.active_call.get("call_uuid") == call_uuid)) else {}
     batch_id = params.get("batch_id") or active_call_meta.get("batch_id")
-    template_id = params.get("template_id") or active_call_meta.get("template_id") or dialer.selected_template_id
+    template_id = params.get("template_id") or active_call_meta.get("template_id") or d.selected_template_id
     asyncio.create_task(asyncio.to_thread(db.record_call_start, call_uuid, phone_number=to_number, batch_id=batch_id, metadata=params))
-    dialer.set_call_status(call_uuid, "in_call")
+    d.set_call_status(call_uuid, "in_call")
     tracer = diagnostics.get_tracer(call_uuid, phone_number=to_number, batch_id=batch_id)
     tracer.t_answer = t_answer
     tracer.record_event("call_answered", {"timestamp": t_answer, "to": to_number, "from": from_number, "call_id": call_uuid})
@@ -222,7 +242,7 @@ async def answer_call(request: Request):
     public_url = get_public_url()
     status_callback = xml_escape(f"{public_url}/stream-status")
     rec_callback = xml_escape(f"{public_url}/recording-callback?batch_id={batch_id or ''}&to={to_number}")
-    ws_stream_url = get_ws_url(f"/ws?call_uuid={call_uuid}&to={to_number}&batch_id={batch_id or ''}&template_id={template_id or ''}")
+    ws_stream_url = get_ws_url(f"/ws?call_uuid={call_uuid}&to={to_number}&batch_id={batch_id or ''}&template_id={template_id or ''}&operator={d.operator}")
 
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -270,12 +290,14 @@ async def recording_callback(request: Request):
 async def hangup_webhook(request: Request):
     params = await parse_params(request)
     call_uuid = params.get("CallUUID", "") or params.get("call_uuid", "")
-    batch_id = params.get("batch_id") or (dialer.active_call.get("batch_id") if dialer.active_call else None) or dialer.current_batch_id
+    op = params.get("operator")
+    d = resolve_dialer(request, operator=op, call_uuid=call_uuid)
+    batch_id = params.get("batch_id") or (d.active_call.get("batch_id") if d.active_call else None) or d.current_batch_id
     to_number = params.get("To") or params.get("to") or ""
     hangup_cause = params.get("HangupCause") or params.get("hangup_cause") or "NORMAL_CLEARING"
     hangup_source = params.get("HangupSource") or params.get("hangup_source") or ""
     duration = params.get("Duration") or params.get("duration")
-    logger.info(f"Vobiz Hangup callback for {call_uuid}: cause={hangup_cause}, source={hangup_source}, batch={batch_id}")
+    logger.info(f"Vobiz Hangup callback for {call_uuid} (operator: {d.operator}): cause={hangup_cause}, source={hangup_source}, batch={batch_id}")
     if call_uuid:
         tracer = diagnostics.get_tracer(call_uuid, phone_number=to_number, batch_id=batch_id)
         if not any(e.get("event") == "call_answered" for e in tracer.events):
@@ -291,7 +313,7 @@ async def hangup_webhook(request: Request):
             tracer.record_event("carrier_signaling", carrier_details)
         tracer.record_hangup(cause=hangup_cause, source=hangup_source, duration=duration)
         db.finalize_call(call_uuid, status="hung_up", batch_id=batch_id)
-        dialer.on_call_ended(call_uuid)
+        d.on_call_ended(call_uuid)
     return {"status": "ok"}
 
 # Real-time WebSocket endpoint bridged to Pipecat agent
@@ -301,9 +323,11 @@ async def websocket_endpoint(websocket: WebSocket):
     query_params = dict(websocket.query_params)
     call_uuid = query_params.get("call_uuid", "unknown_call")
     to_number = query_params.get("to", "")
-    batch_id = query_params.get("batch_id") or (dialer.active_call.get("batch_id") if dialer.active_call else None) or dialer.current_batch_id
-    template_id = query_params.get("template_id") or (dialer.active_call.get("template_id") if dialer.active_call else None) or dialer.selected_template_id
-    dialer.set_call_status(call_uuid, "in_call")
+    op = query_params.get("operator")
+    d = resolve_dialer(operator=op, call_uuid=call_uuid)
+    batch_id = query_params.get("batch_id") or (d.active_call.get("batch_id") if d.active_call else None) or d.current_batch_id
+    template_id = query_params.get("template_id") or (d.active_call.get("template_id") if d.active_call else None) or d.selected_template_id
+    d.set_call_status(call_uuid, "in_call")
     tracer = diagnostics.get_tracer(call_uuid, phone_number=to_number, batch_id=batch_id)
 
     try:
@@ -323,7 +347,7 @@ async def websocket_endpoint(websocket: WebSocket):
         tracer.record_error("websocket_error", str(exc))
         tracer.record_ws_close(1006, str(exc))
     finally:
-        dialer.on_call_ended(call_uuid)
+        d.on_call_ended(call_uuid)
 
 dial_lock = asyncio.Lock()
 
@@ -336,9 +360,12 @@ async def trigger_dial(request: Request):
     if not to_number:
         return JSONResponse(status_code=400, content={"ok": False, "error": "Missing phone number"})
 
+    op = payload.get("operator") or payload.get("created_by") or request.headers.get("X-Operator")
+    d = resolve_dialer(request, operator=op)
+
     async with dial_lock:
-        if dialer.active_call:
-            active_num = dialer.active_call.get("phone_number", "another recipient")
+        if d.active_call:
+            active_num = d.active_call.get("phone_number", "another recipient")
             return JSONResponse(
                 status_code=409,
                 content={"ok": False, "error": f"Line busy: A call is currently active with {active_num}. Please wait for it to finish."}
@@ -346,9 +373,9 @@ async def trigger_dial(request: Request):
 
         public_url = get_public_url()
         from_number = payload.get("from")
-        template_id = payload.get("template_id") or dialer.selected_template_id
-        answer_url = f"{public_url}/answer?to={to_number}&template_id={template_id}"
-        hangup_url = f"{public_url}/hangup"
+        template_id = payload.get("template_id") or d.selected_template_id
+        answer_url = f"{public_url}/answer?to={to_number}&template_id={template_id}&operator={d.operator}"
+        hangup_url = f"{public_url}/hangup?operator={d.operator}"
 
         try:
             result = await vobiz_api.place_call(
@@ -358,7 +385,7 @@ async def trigger_dial(request: Request):
                 from_number=from_number,
             )
             call_uuid = result.get("request_uuid") or result.get("call_uuid") or ""
-            dialer.set_active_call(
+            d.set_active_call(
                 call_uuid=call_uuid,
                 phone_number=to_number,
                 customer_name=payload.get("customer_name", ""),
@@ -368,7 +395,7 @@ async def trigger_dial(request: Request):
             db.record_call_start(
                 call_uuid=call_uuid,
                 phone_number=to_number,
-                metadata={"customer_name": payload.get("customer_name", ""), "status": "dialing"},
+                metadata={"customer_name": payload.get("customer_name", ""), "status": "dialing", "operator": d.operator, "created_by": d.operator},
             )
             return {"ok": True, "status": "call_initiated", "call_uuid": call_uuid, "vobiz_response": result}
         except Exception as exc:
@@ -376,17 +403,20 @@ async def trigger_dial(request: Request):
 
 # Retrieve dialer and campaign status for UI HUD
 @app.get("/api/campaign/status")
-async def get_campaign_status():
-    return dialer.get_status_payload()
+async def get_campaign_status(request: Request):
+    d = resolve_dialer(request)
+    return d.get_status_payload()
 
 # Fetch CRM pending missed calls
 @app.get("/api/crm/pending-calls")
 async def get_crm_pending_calls(
+    request: Request,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     status: Optional[str] = "all",
 ):
-    calls = dialer.fetch_crm_pending(start_date, end_date, status)
+    d = resolve_dialer(request)
+    calls = d.fetch_crm_pending(start_date, end_date, status)
     return {"ok": True, "calls": calls, "total": len(calls)}
 
 # Queue selected leads into outbound campaign
@@ -398,22 +428,26 @@ async def queue_campaign_leads(request: Request):
     source_filter = payload.get("source_filter")
     template_id = payload.get("template_id")
     append = payload.get("append", False)
-    batch_id = dialer.queue_leads(
+    created_by = payload.get("created_by") or payload.get("operator")
+    d = resolve_dialer(request, operator=created_by)
+    batch_id = d.queue_leads(
         leads,
         batch_name=batch_name,
         source_filter=source_filter,
         template_id=template_id,
         append=append,
+        created_by=created_by,
     )
     return {"ok": True, "batch_id": batch_id, "queued": len(leads), "appended": bool(append)}
 
 # List all campaign templates
 @app.get("/api/campaign/templates")
-async def list_campaign_templates():
+async def list_campaign_templates(request: Request):
+    d = resolve_dialer(request)
     return {
         "ok": True,
         "templates": db.get_templates(),
-        "selected_template_id": dialer.selected_template_id,
+        "selected_template_id": d.selected_template_id,
     }
 
 # Retrieve specific campaign template
@@ -456,44 +490,51 @@ async def select_campaign_template(request: Request):
     tpl_id = body.get("template_id")
     if not tpl_id:
         return JSONResponse(status_code=400, content={"ok": False, "error": "Missing template_id"})
-    dialer.set_selected_template(tpl_id)
-    return {"ok": True, "selected_template_id": dialer.selected_template_id}
+    d = resolve_dialer(request, operator=body.get("operator"))
+    d.set_selected_template(tpl_id)
+    return {"ok": True, "selected_template_id": d.selected_template_id}
 
 # Start OBD automated calling
 @app.post("/api/campaign/start")
-async def start_campaign():
-    dialer.start(get_public_url())
-    return {"ok": True, "status": dialer.status}
+async def start_campaign(request: Request):
+    d = resolve_dialer(request)
+    d.start(get_public_url())
+    return {"ok": True, "status": d.status}
 
 # Pause OBD automated calling
 @app.post("/api/campaign/pause")
-async def pause_campaign():
-    dialer.pause()
-    return {"ok": True, "status": dialer.status}
+async def pause_campaign(request: Request):
+    d = resolve_dialer(request)
+    d.pause()
+    return {"ok": True, "status": d.status}
 
 # Resume OBD automated calling
 @app.post("/api/campaign/resume")
-async def resume_campaign():
-    dialer.resume(get_public_url())
-    return {"ok": True, "status": dialer.status}
+async def resume_campaign(request: Request):
+    d = resolve_dialer(request)
+    d.resume(get_public_url())
+    return {"ok": True, "status": d.status}
 
 # Stop OBD automated calling
 @app.post("/api/campaign/stop")
-async def stop_campaign():
-    dialer.stop()
-    return {"ok": True, "status": dialer.status}
+async def stop_campaign(request: Request):
+    d = resolve_dialer(request)
+    d.stop()
+    return {"ok": True, "status": d.status}
 
 # Clear dialer queue
 @app.post("/api/campaign/clear")
-async def clear_campaign():
-    dialer.clear()
-    return {"ok": True, "status": dialer.status}
+async def clear_campaign(request: Request):
+    d = resolve_dialer(request)
+    d.clear()
+    return {"ok": True, "status": d.status}
 
 # Reset dialer queue and counters
 @app.post("/api/campaign/reset")
-async def reset_campaign():
-    dialer.reset()
-    return {"ok": True, "status": dialer.status}
+async def reset_campaign(request: Request):
+    d = resolve_dialer(request)
+    d.reset()
+    return {"ok": True, "status": d.status}
 
 # Retrieve campaign batch list
 @app.get("/api/campaign/batches")
@@ -530,7 +571,7 @@ async def delete_campaign_batch(batch_id: str):
 @app.get("/api/recording/{call_uuid}")
 async def get_recording(call_uuid: str):
     doc = db.get_call(call_uuid)
-    rec_url = doc.get("recording_url") if doc else None
+    rec_url = (doc.get("recording_url") or doc.get("recordingUrl")) if doc else None
 
     # Fallback: query Vobiz Recording API if not saved in database
     if not rec_url:
@@ -597,6 +638,14 @@ async def list_calls(
         has_recording=has_recording,
         has_callback=has_callback,
     )
+
+# Retrieve single call record with full transcripts, carrier logs, and events
+@app.get("/api/calls/{call_uuid}")
+async def get_call_detail(call_uuid: str):
+    doc = db.get_call(call_uuid)
+    if not doc:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Call not found"})
+    return {"ok": True, "call": doc}
 
 # Update call record fields like disposition and callback time
 @app.api_route("/api/call/{call_uuid}", methods=["PATCH", "POST"])

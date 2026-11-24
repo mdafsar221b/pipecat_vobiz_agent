@@ -19,9 +19,10 @@ import diagnostics
 import vobiz_api
 
 class OutboundDialer:
-    """Manages the outbound call queue, OBD campaign execution, and live call tracking."""
+    """Manages an operator-specific outbound call queue, OBD campaign execution, and live call tracking."""
 
-    def __init__(self):
+    def __init__(self, operator: str = "default"):
+        self.operator = operator
         self.status = "idle"
         self.queue: List[Dict[str, Any]] = []
         self.active_call: Optional[Dict[str, Any]] = None
@@ -77,6 +78,7 @@ class OutboundDialer:
         source_filter: Optional[str] = None,
         template_id: Optional[str] = None,
         append: bool = False,
+        created_by: Optional[str] = None,
     ) -> str:
         # If append requested and there is an active running batch, append without clearing queue
         if append and self.current_batch_id:
@@ -133,6 +135,7 @@ class OutboundDialer:
             "total_leads": len(self.queue),
             "leads": [dict(l) for l in leads],
             "status": "active",
+            "created_by": created_by or "Operator",
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "started_at": time.time(),
         }
@@ -348,8 +351,8 @@ class OutboundDialer:
             lead_name = pending_item.get("customer_name", "")
             logger.info(f"Dialer initiating call to {target_phone} (batch: {batch_id})")
 
-            call_answer_url = f"{public_url}/answer?batch_id={batch_id}&lead_id={lead_id}&to={target_phone}&template_id={self.selected_template_id}"
-            call_hangup_url = f"{public_url}/hangup?batch_id={batch_id}&lead_id={lead_id}&to={target_phone}"
+            call_answer_url = f"{public_url}/answer?batch_id={batch_id}&lead_id={lead_id}&to={target_phone}&template_id={self.selected_template_id}&operator={self.operator}"
+            call_hangup_url = f"{public_url}/hangup?batch_id={batch_id}&lead_id={lead_id}&to={target_phone}&operator={self.operator}"
 
             try:
                 res = await vobiz_api.place_call(
@@ -383,7 +386,7 @@ class OutboundDialer:
                     call_uuid=call_uuid,
                     phone_number=target_phone,
                     batch_id=batch_id,
-                    metadata={"customer_name": lead_name, "lead_id": lead_id, "status": "dialing"},
+                    metadata={"customer_name": lead_name, "lead_id": lead_id, "status": "dialing", "operator": self.operator, "created_by": self.operator},
                 )
             except Exception as exc:
                 logger.error(f"Dialer failed to dial {target_phone}: {exc}")
@@ -491,6 +494,28 @@ class OutboundDialer:
                 system_prompt=tpl.get("system_prompt", ""),
                 greeting_audio_path=tpl.get("greeting_audio_path") or f"assets/greeting_{template_id}_16k.pcm",
             )
+
+# Multi-operator dialer manager to support separate live dialers per user
+class MultiOperatorDialerManager:
+    def __init__(self):
+        self._dialers: Dict[str, OutboundDialer] = {}
+
+    def get_dialer(self, operator: Optional[str] = None) -> OutboundDialer:
+        op = (operator or "default").strip().lower()
+        if op not in self._dialers:
+            self._dialers[op] = OutboundDialer(operator=op)
+        return self._dialers[op]
+
+    def find_dialer_by_call_uuid(self, call_uuid: str) -> Optional[OutboundDialer]:
+        for d in self._dialers.values():
+            if d.active_call and d.active_call.get("call_uuid") == call_uuid:
+                return d
+            if any(item.get("call_uuid") == call_uuid for item in d.queue):
+                return d
+        return None
+
+manager = MultiOperatorDialerManager()
+dialer = manager.get_dialer("default")
 
 # Generate compact ISO-like timestamp string
 def datetime_now_str() -> str:

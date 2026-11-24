@@ -217,20 +217,17 @@ export default function BatchesTab({
   const handleRerunBatch = async (batchIdToRerun, batchNameToRerun) => {
     const targetId = batchIdToRerun || activeBatchId;
     if (!targetId) return;
-    const displayName = batchNameToRerun || batchDetail?.batch?.name || targetId;
-    if (!window.confirm(`Re-run batch "${displayName}"? This will queue all its leads into a fresh dialing batch.`)) return;
 
     setIsRerunningBatch(true);
     try {
       const res = await fetch(`/api/campaign/batches/${encodeURIComponent(targetId)}/rerun`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'all' }),
+        body: JSON.stringify({ mode: 'unreached' }),
       });
       if (res.ok) {
         const data = await res.json();
         if (data.ok) {
-          alert(`Successfully queued ${data.queued} leads into new batch: ${data.name || data.batch_id}`);
           onRefreshCampaign?.();
           onRefreshBatches?.();
           if (data.batch_id) openBatchDetail(data.batch_id);
@@ -248,20 +245,24 @@ export default function BatchesTab({
         }
       }
       if (callsToQueue && callsToQueue.length > 0 && onQueueLeads) {
-        const leads = callsToQueue.map((c) => ({
+        // Filter for pending or unreached
+        const unreached = callsToQueue.filter(
+          (c) => c.status === 'pending' || !['interested', 'whatsup', 'jad'].includes((c.disposition || '').toLowerCase())
+        );
+        const leads = (unreached.length > 0 ? unreached : callsToQueue).map((c) => ({
           phone_number: c.phone_number,
           customer_name: c.customer_name || c.contact_name || '',
         })).filter((l) => l.phone_number);
-        const newBatchName = `${displayName} (Rerun)`;
-        await onQueueLeads({ leads, batch_name: newBatchName, source_filter: `Rerun ${targetId}` });
-        alert(`Successfully queued ${leads.length} leads into new batch: ${newBatchName}`);
+        const displayName = batchNameToRerun || batchDetail?.batch?.name || targetId;
+        const newBatchName = `${displayName} (Pending)`;
+        await onQueueLeads({ leads, batch_name: newBatchName, source_filter: `Pending of ${targetId}`, start_immediately: true });
         onRefreshCampaign?.();
         onRefreshBatches?.();
         return;
       }
       throw new Error(`Server returned ${res.status} ${res.statusText}`);
     } catch (err) {
-      alert(`Failed to re-run batch: ${err.message}`);
+      alert(`Failed to start pending leads: ${err.message}`);
     } finally {
       setIsRerunningBatch(false);
     }
@@ -354,12 +355,17 @@ export default function BatchesTab({
     if (batchKpiFilter !== 'all') {
       list = list.filter((c) => {
         const disp = (c.disposition || 'completed').toLowerCase();
+        if (batchKpiFilter === 'pending') {
+          return c.status === 'pending' || disp === 'pending';
+        }
         if (batchKpiFilter === 'dialed') {
           return (
-            c.status === 'in_call' ||
-            c.status === 'hung_up' ||
-            (c.duration || 0) > 0 ||
-            (c.events && c.events.length > 0)
+            (c.status !== 'pending' && disp !== 'pending') &&
+            (c.status === 'in_call' ||
+              c.status === 'hung_up' ||
+              (c.duration || 0) > 0 ||
+              (c.events && c.events.length > 0) ||
+              c.call_uuid)
           );
         }
         if (batchKpiFilter === 'interested') return disp === 'interested';
@@ -606,10 +612,10 @@ export default function BatchesTab({
               onClick={() => handleRerunBatch()}
               disabled={isRerunningBatch}
               className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold bg-[#008792] text-white hover:bg-[#00747d] transition disabled:opacity-50"
-              title="Re-run all leads from this batch"
+              title="Dial unreached and pending leads from this batch"
             >
               <RotateCcw className={`w-3.5 h-3.5 ${isRerunningBatch ? 'animate-spin' : ''}`} />
-              <span>{isRerunningBatch ? 'Re-running...' : 'Re-run Batch'}</span>
+              <span>{isRerunningBatch ? 'Starting...' : 'Dial Pending Leads'}</span>
             </button>
             <button
               onClick={handleDeleteBatch}
@@ -641,7 +647,7 @@ export default function BatchesTab({
             )}
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-1.5">
+          <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-11 gap-1.5">
             {/* Total Card */}
             <Card
               onClick={() => handleKpiCardClick('all')}
@@ -656,6 +662,22 @@ export default function BatchesTab({
                 {b.total_leads || 0}
               </span>
               <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">Total</span>
+            </Card>
+
+            {/* Pending Card */}
+            <Card
+              onClick={() => handleKpiCardClick('pending')}
+              className={cn(
+                'py-1.5 px-2 text-center cursor-pointer transition-all select-none shadow-none',
+                batchKpiFilter === 'pending'
+                  ? 'bg-sky-600 text-white border-sky-600'
+                  : 'bg-card border-border hover:bg-muted/50'
+              )}
+            >
+              <span className={cn('block text-sm font-bold font-mono leading-none mb-0.5', batchKpiFilter === 'pending' ? 'text-white' : 'text-sky-600')}>
+                {Math.max(0, (b.total_leads || 0) - (m.dialed || 0))}
+              </span>
+              <span className="text-[9px] font-semibold uppercase tracking-wider opacity-75">Pending</span>
             </Card>
 
             {/* Dialed Card */}
