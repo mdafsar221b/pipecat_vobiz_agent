@@ -144,6 +144,72 @@ class OutboundDialer:
         logger.info(f"Queued {len(self.queue)} leads into batch {batch_id} (Template: {effective_template_id})")
         return batch_id
 
+    # Resume the same batch by loading only uncalled/pending leads into the dialer queue without creating a new batch
+    def resume_batch(self, batch_id: str) -> Dict[str, Any]:
+        b_col = db.get_batches_collection()
+        c_col = db.get_collection()
+        batch_doc = b_col.find_one({"batch_id": batch_id}) if b_col is not None else None
+
+        if not batch_doc:
+            return {"ok": False, "error": f"Batch {batch_id} not found"}
+
+        # Find all numbers already dialed in this batch
+        dialed_phones = set()
+        if c_col is not None:
+            for c in c_col.find({"batch_id": batch_id}, {"phone_number": 1, "customerNumber": 1}):
+                num = c.get("phone_number") or c.get("customerNumber")
+                if num:
+                    digits = "".join(ch for ch in str(num) if ch.isdigit())[-10:]
+                    if digits:
+                        dialed_phones.add(digits)
+
+        # Extract only uncalled leads from original saved leads list
+        saved_leads = batch_doc.get("leads", [])
+        pending_leads = []
+        for lead in saved_leads:
+            num = lead.get("phone_number") or lead.get("customerNumber")
+            if num:
+                digits = "".join(ch for ch in str(num) if ch.isdigit())[-10:]
+                if digits and digits not in dialed_phones:
+                    pending_leads.append(lead)
+
+        if not pending_leads:
+            return {"ok": False, "error": "All leads in this batch have already been dialed. No pending leads remaining."}
+
+        # Keep the exact same batch_id and load only pending leads
+        self.current_batch_id = batch_id
+        self.queue.clear()
+        self.total_batch_leads = batch_doc.get("total_leads") or len(saved_leads)
+
+        effective_template_id = batch_doc.get("template_id") or self.selected_template_id
+        self.selected_template_id = effective_template_id
+
+        for lead in pending_leads:
+            entry = {
+                "id": lead.get("id") or str(time.time()),
+                "phone_number": lead.get("phone_number") or lead.get("customerNumber"),
+                "customer_name": lead.get("customer_name") or lead.get("customerName", ""),
+                "source": lead.get("source") or lead.get("marketing_source", ""),
+                "batch_id": batch_id,
+                "status": "pending",
+                "queued_at": time.time(),
+            }
+            if entry["phone_number"]:
+                self.queue.append(entry)
+
+        # Mark batch status active in database
+        if b_col is not None:
+            b_col.update_one({"batch_id": batch_id}, {"$set": {"status": "active"}})
+
+        logger.info(f"Resumed batch {batch_id}: loaded {len(self.queue)} pending leads without creating a new batch")
+        return {
+            "ok": True,
+            "batch_id": batch_id,
+            "resumed": len(self.queue),
+            "total_leads": self.total_batch_leads,
+            "name": batch_doc.get("name") or batch_id,
+        }
+
     # Re-run a previous batch by re-queueing its leads
     def rerun_batch(self, batch_id: str, mode: str = "all") -> Dict[str, Any]:
         b_col = db.get_batches_collection()

@@ -553,6 +553,15 @@ async def get_batch_detail(batch_id: str):
     detail = db.get_batch_detail(batch_id)
     return {"ok": True, **detail}
 
+# Resume an existing batch in-place by queueing only pending leads without creating a new batch
+@app.post("/api/campaign/batches/{batch_id}/resume")
+async def resume_campaign_batch(batch_id: str, request: Request):
+    d = resolve_dialer(request)
+    result = d.resume_batch(batch_id)
+    if result.get("ok"):
+        d.start(get_public_url())
+    return result
+
 # Re-run a campaign batch
 @app.post("/api/campaign/batches/{batch_id}/rerun")
 async def rerun_campaign_batch(batch_id: str, request: Request):

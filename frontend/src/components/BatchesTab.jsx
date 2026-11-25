@@ -382,28 +382,84 @@ export default function BatchesTab({
     // Filter by KPI Card Selection
     if (batchKpiFilter !== 'all') {
       list = list.filter((c) => {
-        const disp = (c.disposition || 'completed').toLowerCase();
+        const rawDisp = (c.rawDisposition || c.disposition || '').toLowerCase().trim().replace(/[\s-]+/g, '_');
+        const disp = (c.disposition || '').toLowerCase().trim();
+        const status = (c.status || c.callStatus || '').toLowerCase().trim();
+
         if (batchKpiFilter === 'pending') {
-          return c.status === 'pending' || disp === 'pending';
+          return status === 'pending' || rawDisp === 'pending' || disp === 'pending';
         }
         if (batchKpiFilter === 'dialed') {
           return (
-            (c.status !== 'pending' && disp !== 'pending') &&
-            (c.status === 'in_call' ||
-              c.status === 'hung_up' ||
+            status !== 'pending' &&
+            rawDisp !== 'pending' &&
+            disp !== 'pending' &&
+            (status === 'in_call' ||
+              status === 'hung_up' ||
+              status === 'completed' ||
+              status === 'in_progress' ||
+              status === 'answered' ||
               (c.duration || 0) > 0 ||
               (c.events && c.events.length > 0) ||
               c.call_uuid)
           );
         }
-        if (batchKpiFilter === 'interested') return disp === 'interested';
-        if (batchKpiFilter === 'declined') return disp === 'not_interested' || disp === 'declined';
-        if (batchKpiFilter === 'wrong') return disp === 'wrong_number';
-        if (batchKpiFilter === 'silent') return disp === 'not_talking';
-        if (batchKpiFilter === 'no_answer') return disp === 'no_answer' || disp === 'busy' || disp === 'na';
-        if (batchKpiFilter === 'dropped') return disp === 'dropped';
-        if (batchKpiFilter === 'whatsup') return disp === 'whatsup' || disp === 'whatsapp';
-        if (batchKpiFilter === 'jad') return disp === 'jad';
+        if (batchKpiFilter === 'interested') {
+          return rawDisp === 'interested' || disp === 'interested';
+        }
+        if (batchKpiFilter === 'declined') {
+          return (
+            rawDisp === 'not_interested' ||
+            rawDisp === 'declined' ||
+            disp === 'not interested' ||
+            disp === 'not_interested' ||
+            disp === 'declined'
+          );
+        }
+        if (batchKpiFilter === 'wrong') {
+          return (
+            rawDisp === 'wrong_number' ||
+            disp === 'wrong number' ||
+            disp === 'wrong_number'
+          );
+        }
+        if (batchKpiFilter === 'silent') {
+          return (
+            rawDisp === 'not_talking' ||
+            rawDisp === 'silent' ||
+            disp === 'not talking' ||
+            disp === 'not_talking' ||
+            disp === 'silent'
+          );
+        }
+        if (batchKpiFilter === 'no_answer') {
+          return (
+            rawDisp === 'no_answer' ||
+            rawDisp === 'busy' ||
+            rawDisp === 'failed' ||
+            rawDisp === 'na' ||
+            disp === 'no answer' ||
+            disp === 'no_answer' ||
+            disp === 'busy' ||
+            disp === 'failed'
+          );
+        }
+        if (batchKpiFilter === 'dropped') {
+          return (
+            rawDisp === 'dropped' ||
+            rawDisp === 'system_error' ||
+            rawDisp === 'inquiry_drop' ||
+            disp === 'dropped' ||
+            disp === 'system error' ||
+            disp === 'inquiry drop'
+          );
+        }
+        if (batchKpiFilter === 'whatsup') {
+          return rawDisp === 'whatsup' || rawDisp === 'whatsapp' || disp === 'whatsup' || disp === 'whatsapp';
+        }
+        if (batchKpiFilter === 'jad') {
+          return rawDisp === 'jad' || disp === 'jad';
+        }
         return true;
       });
     }
