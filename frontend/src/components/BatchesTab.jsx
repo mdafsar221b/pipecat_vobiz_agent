@@ -128,6 +128,7 @@ export default function BatchesTab({
   // Batch Detail Selection State
   const [selectedBatchUuids, setSelectedBatchUuids] = useState(new Set());
   const [isQueueingBatchCalls, setIsQueueingBatchCalls] = useState(false);
+  const [isResumingBatch, setIsResumingBatch] = useState(false);
   const [isRerunningBatch, setIsRerunningBatch] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
@@ -212,6 +213,33 @@ export default function BatchesTab({
 
     const batchNameClean = (b.name || activeBatchId).replace(/[^\w-]/g, '_');
     exportToExcel(data, `Batch_${batchNameClean}_Calls`, 'Batch Calls');
+  };
+
+  // Resume the same batch directly: loads remaining pending leads into dialer without creating a new batch
+  const handleResumeBatch = async (batchIdToResume) => {
+    const targetId = batchIdToResume || activeBatchId;
+    if (!targetId) return;
+
+    setIsResumingBatch(true);
+    try {
+      const res = await fetch(`/api/campaign/batches/${encodeURIComponent(targetId)}/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (data.ok) {
+        alert(`Resumed batch! ${data.resumed} pending leads loaded and dialing resumed.`);
+        onRefreshCampaign?.();
+        onRefreshBatches?.();
+        if (targetId) openBatchDetail(targetId);
+      } else {
+        alert(data.error || 'Failed to resume batch.');
+      }
+    } catch (err) {
+      alert(`Network error while resuming batch: ${err.message}`);
+    } finally {
+      setIsResumingBatch(false);
+    }
   };
 
   const handleRerunBatch = async (batchIdToRerun, batchNameToRerun) => {
@@ -608,14 +636,19 @@ export default function BatchesTab({
                 <span>{isQueueingBatchCalls ? 'Queueing...' : `Queue Selected (${selectedBatchCalls.length})`}</span>
               </Button>
             )}
+            {/* Direct Resume Pending Leads Button: Continues current batch without creating a new one */}
             <button
-              onClick={() => handleRerunBatch()}
-              disabled={isRerunningBatch}
-              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold bg-[#008792] text-white hover:bg-[#00747d] transition disabled:opacity-50"
-              title="Dial unreached and pending leads from this batch"
+              onClick={() => handleResumeBatch()}
+              disabled={isResumingBatch || Math.max(0, (b.total_leads || 0) - (m.dialed || 0)) === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition disabled:opacity-50 cursor-pointer shadow-sm"
+              title="Resume calling the remaining pending leads inside this exact same batch"
             >
-              <RotateCcw className={`w-3.5 h-3.5 ${isRerunningBatch ? 'animate-spin' : ''}`} />
-              <span>{isRerunningBatch ? 'Starting...' : 'Dial Pending Leads'}</span>
+              <RotateCcw className={`w-3.5 h-3.5 ${isResumingBatch ? 'animate-spin' : ''}`} />
+              <span>
+                {isResumingBatch
+                  ? 'Resuming...'
+                  : `Resume Batch (${Math.max(0, (b.total_leads || 0) - (m.dialed || 0))} pending)`}
+              </span>
             </button>
             <button
               onClick={handleDeleteBatch}
@@ -1038,6 +1071,7 @@ export default function BatchesTab({
                 const launchTimestamp = formatLaunchTimestamp(b);
                 const total = b.total_leads || 0;
                 const dialed = m.dialed || 0;
+                const uncalledCount = Math.max(0, total - dialed);
                 const pct = total > 0 ? Math.min(100, Math.round((dialed / total) * 100)) : 0;
 
                 return (
@@ -1141,17 +1175,18 @@ export default function BatchesTab({
                     {/* Actions */}
                     <TableCell className="px-2.5 py-1.5 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          onClick={() => handleRerunBatch(b.batch_id, b.name)}
-                          disabled={isRerunningBatch}
-                          className="h-6 gap-1 px-2 text-[11px] font-semibold text-[#008792] hover:border-[#008792] cursor-pointer"
-                          title="Re-run this batch"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          <span>Re-run</span>
-                        </Button>
+                        {uncalledCount > 0 ? (
+                          <Button
+                            size="xs"
+                            onClick={() => handleResumeBatch(b.batch_id)}
+                            disabled={isResumingBatch}
+                            className="h-6 gap-1 px-2 text-[11px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-xs"
+                            title={`Resume dialing remaining ${uncalledCount} pending leads in this batch`}
+                          >
+                            <RotateCcw className={`w-3 h-3 ${isResumingBatch ? 'animate-spin' : ''}`} />
+                            <span>Resume ({uncalledCount})</span>
+                          </Button>
+                        ) : null}
                         <Button
                           size="xs"
                           variant="ghost"
