@@ -64,10 +64,13 @@ export default function ExcelImportModal({
   // Disposition filter & Slicing states
   const [selectedDispositions, setSelectedDispositions] = useState([]);
   const [dispSearch, setDispSearch] = useState('');
-  const [sliceMode, setSliceMode] = useState('all'); // 'all' | 'count' | 'range'
-  const [sliceCount, setSliceCount] = useState(100);
+  const [excludeCalled, setExcludeCalled] = useState(true);
+  const [dialedNumbersSet, setDialedNumbersSet] = useState(new Set());
+  const [isLoadingDialed, setIsLoadingDialed] = useState(false);
+  const [sliceMode, setSliceMode] = useState('range'); // 'range' | 'count' | 'all'
+  const [sliceCount, setSliceCount] = useState(150);
   const [rangeStart, setRangeStart] = useState(1);
-  const [rangeEnd, setRangeEnd] = useState(100);
+  const [rangeEnd, setRangeEnd] = useState(150);
   const [runImmediately, setRunImmediately] = useState(false);
 
   // Check if a queue is currently running or has pending calls
@@ -75,6 +78,26 @@ export default function ExcelImportModal({
   const pendingCount = campaignData?.pending_count || campaignData?.counts?.pending || 0;
   const hasRunningQueue = isDialerRunning || pendingCount > 0;
   const [queueStrategy, setQueueStrategy] = useState('append'); // 'append' | 'replace'
+
+  // Fetch dialed numbers when modal opens
+  React.useEffect(() => {
+    if (isOpen) {
+      setIsLoadingDialed(true);
+      fetch('/api/campaign/dialed-numbers')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data && data.numbers) {
+            setDialedNumbersSet(new Set(data.numbers));
+          }
+        })
+        .catch((err) => {
+          console.warn('Could not load dialed numbers for deduplication:', err);
+        })
+        .finally(() => {
+          setIsLoadingDialed(false);
+        });
+    }
+  }, [isOpen]);
 
   // Reset when dialog opens/closes
   const handleOpenChange = (open) => {
@@ -93,10 +116,10 @@ export default function ExcelImportModal({
     setBatchName('');
     setSelectedDispositions([]);
     setDispSearch('');
-    setSliceMode('all');
-    setSliceCount(100);
+    setSliceMode('range');
+    setSliceCount(150);
     setRangeStart(1);
-    setRangeEnd(100);
+    setRangeEnd(150);
     setRunImmediately(false);
     setQueueStrategy('append');
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -165,9 +188,17 @@ export default function ExcelImportModal({
       .sort((a, b) => b.count - a.count);
   }, [parsedData, mapping.notes]);
 
-  // Apply disposition filtering and slicing
+  // Apply disposition filtering, duplicate exclusion, and slicing
   const filteredLeads = useMemo(() => {
     let list = [...normalized.validLeads];
+
+    // Exclude leads already dialed or in campaign batches
+    if (excludeCalled && dialedNumbersSet.size > 0) {
+      list = list.filter((l) => {
+        const digits = String(l.phone_number || '').replace(/\D/g, '').slice(-10);
+        return !dialedNumbersSet.has(digits);
+      });
+    }
 
     // Filter by selected dispositions (if any selected)
     if (selectedDispositions.length > 0) {
@@ -393,7 +424,7 @@ export default function ExcelImportModal({
               </div>
 
               {/* Parsing Metrics Banner */}
-              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="grid grid-cols-4 gap-2 text-center text-xs">
                 <div className="p-2 border border-border rounded-md bg-card">
                   <span className="text-[10px] uppercase font-bold text-muted-foreground block">Total Rows</span>
                   <span className="text-base font-bold font-mono text-foreground">
@@ -404,6 +435,12 @@ export default function ExcelImportModal({
                   <span className="text-[10px] uppercase font-bold text-emerald-700 block">Valid Leads</span>
                   <span className="text-base font-bold font-mono text-emerald-700">
                     {normalized.validLeads.length}
+                  </span>
+                </div>
+                <div className="p-2 border border-sky-200 rounded-md bg-sky-50/60 text-sky-800">
+                  <span className="text-[10px] uppercase font-bold text-sky-700 block">Previously Called</span>
+                  <span className="text-base font-bold font-mono text-sky-700">
+                    {normalized.validLeads.filter((l) => dialedNumbersSet.has(String(l.phone_number || '').replace(/\D/g, '').slice(-10))).length}
                   </span>
                 </div>
                 <div className="p-2 border border-border rounded-md bg-card">
@@ -521,6 +558,30 @@ export default function ExcelImportModal({
                   </Badge>
                 </div>
 
+                {/* Exclusion Toggle for Previously Called Contacts */}
+                <div className="flex items-center justify-between p-2.5 bg-background border border-border rounded-md text-xs">
+                  <div className="space-y-0.5">
+                    <span className="font-semibold text-foreground flex items-center gap-1.5">
+                      <span>Exclude Contacts Already Called / In Batches</span>
+                      {isLoadingDialed && (
+                        <RefreshCw className="w-3 h-3 text-[#008792] animate-spin" />
+                      )}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground block">
+                      Cross-checks against all {dialedNumbersSet.size} previous calls in the database to prevent duplicate dialing.
+                    </span>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={excludeCalled}
+                      onChange={(e) => setExcludeCalled(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-muted peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#008792]" />
+                  </label>
+                </div>
+
                 {/* Disposition Checkboxes */}
                 {availableDispositions.length > 0 && (
                   <div className="space-y-1.5 pt-1">
@@ -582,16 +643,22 @@ export default function ExcelImportModal({
                 )}
 
                 {/* Lead Slicing / Count Selector */}
-                <div className="space-y-1.5 pt-1 border-t border-border/60">
-                  <span className="text-[11px] font-semibold text-foreground block">
-                    Lead Slicing / Batch Size
-                  </span>
+                <div className="space-y-2 pt-1 border-t border-border/60">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-foreground block">
+                      Lead Range & Slicing
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">
+                      Select custom range (e.g. 151 to 300) or take by count
+                    </span>
+                  </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <label
-                      onClick={() => setSliceMode('all')}
+                      onClick={() => setSliceMode('range')}
                       className={cn(
                         'p-2 rounded border cursor-pointer flex items-center gap-1.5 text-xs transition',
-                        sliceMode === 'all'
+                        sliceMode === 'range'
                           ? 'border-[#008792] bg-[#008792]/5 font-semibold text-foreground'
                           : 'border-border bg-card text-muted-foreground'
                       )}
@@ -599,10 +666,10 @@ export default function ExcelImportModal({
                       <input
                         type="radio"
                         name="sliceMode"
-                        checked={sliceMode === 'all'}
-                        onChange={() => setSliceMode('all')}
+                        checked={sliceMode === 'range'}
+                        onChange={() => setSliceMode('range')}
                       />
-                      <span>All Matching</span>
+                      <span>From - To Range</span>
                     </label>
 
                     <label
@@ -624,10 +691,10 @@ export default function ExcelImportModal({
                     </label>
 
                     <label
-                      onClick={() => setSliceMode('range')}
+                      onClick={() => setSliceMode('all')}
                       className={cn(
                         'p-2 rounded border cursor-pointer flex items-center gap-1.5 text-xs transition',
-                        sliceMode === 'range'
+                        sliceMode === 'all'
                           ? 'border-[#008792] bg-[#008792]/5 font-semibold text-foreground'
                           : 'border-border bg-card text-muted-foreground'
                       )}
@@ -635,18 +702,83 @@ export default function ExcelImportModal({
                       <input
                         type="radio"
                         name="sliceMode"
-                        checked={sliceMode === 'range'}
-                        onChange={() => setSliceMode('range')}
+                        checked={sliceMode === 'all'}
+                        onChange={() => setSliceMode('all')}
                       />
-                      <span>Row Range</span>
+                      <span>All Matching ({normalized.validLeads.length})</span>
                     </label>
                   </div>
 
-                  {/* Slicing Inputs */}
+                  {/* Slicing Controls */}
+                  {sliceMode === 'range' && (
+                    <div className="space-y-2 p-2 bg-background border border-border rounded-md">
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="text-[11px] font-semibold text-foreground">From lead #</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={rangeStart}
+                          onChange={(e) => setRangeStart(Math.max(1, parseInt(e.target.value) || 1))}
+                          className="w-20 h-7 px-2 text-xs font-mono border border-input rounded bg-background font-semibold"
+                        />
+                        <span className="text-[11px] font-semibold text-foreground">to lead #</span>
+                        <input
+                          type="number"
+                          min={rangeStart}
+                          value={rangeEnd}
+                          onChange={(e) => setRangeEnd(Math.max(rangeStart, parseInt(e.target.value) || rangeStart))}
+                          className="w-20 h-7 px-2 text-xs font-mono border border-input rounded bg-background font-semibold"
+                        />
+                        <span className="text-[11px] font-mono text-[#008792] font-semibold">
+                          = {Math.max(0, Number(rangeEnd) - Number(rangeStart) + 1)} leads in this batch
+                        </span>
+                      </div>
+
+                      {/* Quick Next Presets */}
+                      <div className="flex items-center gap-1.5 pt-1 border-t border-border/50 text-[11px]">
+                        <span className="text-muted-foreground">Quick jumps:</span>
+                        {[
+                          { label: '1 - 150', start: 1, end: 150 },
+                          { label: '151 - 300', start: 151, end: 300 },
+                          { label: '301 - 450', start: 301, end: 450 },
+                          { label: '451 - 600', start: 451, end: 600 },
+                        ].map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => {
+                              setRangeStart(preset.start);
+                              setRangeEnd(preset.end);
+                            }}
+                            className={cn(
+                              'px-2 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition',
+                              rangeStart === preset.start && rangeEnd === preset.end
+                                ? 'bg-[#008792] text-white border-[#008792]'
+                                : 'bg-muted/40 text-muted-foreground border-border hover:bg-muted/70'
+                            )}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const curSpan = Math.max(1, rangeEnd - rangeStart + 1);
+                            setRangeStart(rangeEnd + 1);
+                            setRangeEnd(rangeEnd + curSpan);
+                          }}
+                          className="px-2 py-0.5 rounded text-[10px] font-semibold bg-[#008792]/10 text-[#008792] border border-[#008792]/30 hover:bg-[#008792]/20 cursor-pointer"
+                        >
+                          + Next {Math.max(1, rangeEnd - rangeStart + 1)}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {sliceMode === 'count' && (
                     <div className="flex items-center gap-2 pt-1">
                       <span className="text-[11px] text-muted-foreground">Take first:</span>
-                      {[25, 50, 100, 150].map((preset) => (
+                      {[25, 50, 100, 150, 200].map((preset) => (
                         <Button
                           key={preset}
                           type="button"
@@ -666,27 +798,6 @@ export default function ExcelImportModal({
                         className="w-20 h-6 px-2 text-xs font-mono border border-input rounded bg-background"
                       />
                       <span className="text-[11px] text-muted-foreground">leads</span>
-                    </div>
-                  )}
-
-                  {sliceMode === 'range' && (
-                    <div className="flex items-center gap-2 pt-1 text-xs">
-                      <span className="text-[11px] text-muted-foreground">From row:</span>
-                      <input
-                        type="number"
-                        min="1"
-                        value={rangeStart}
-                        onChange={(e) => setRangeStart(Math.max(1, parseInt(e.target.value) || 1))}
-                        className="w-16 h-6 px-2 text-xs font-mono border border-input rounded bg-background"
-                      />
-                      <span className="text-[11px] text-muted-foreground">to row:</span>
-                      <input
-                        type="number"
-                        min={rangeStart}
-                        value={rangeEnd}
-                        onChange={(e) => setRangeEnd(Math.max(rangeStart, parseInt(e.target.value) || rangeStart))}
-                        className="w-16 h-6 px-2 text-xs font-mono border border-input rounded bg-background"
-                      />
                     </div>
                   )}
                 </div>

@@ -475,12 +475,13 @@ async def create_campaign_template(request: Request):
 
 # Delete a campaign template
 @app.delete("/api/campaign/templates/{template_id}")
-async def delete_campaign_template(template_id: str):
+async def delete_campaign_template(template_id: str, request: Request):
     if template_id == "missed_calls":
         return JSONResponse(status_code=400, content={"ok": False, "error": "Cannot delete core default template"})
     success = db.delete_template(template_id)
-    if success and dialer.selected_template_id == template_id:
-        dialer.set_selected_template("missed_calls")
+    d = resolve_dialer(request)
+    if success and d.selected_template_id == template_id:
+        d.set_selected_template("missed_calls")
     return {"ok": success}
 
 # Select active campaign template for ad-hoc dials and upcoming batches
@@ -536,6 +537,11 @@ async def reset_campaign(request: Request):
     d.reset()
     return {"ok": True, "status": d.status}
 
+# Retrieve all previously called numbers for Excel import exclusion
+@app.get("/api/campaign/dialed-numbers")
+async def get_dialed_numbers():
+    return db.get_existing_called_numbers()
+
 # Retrieve campaign batch list
 @app.get("/api/campaign/batches")
 async def list_campaign_batches():
@@ -556,15 +562,17 @@ async def rerun_campaign_batch(batch_id: str, request: Request):
     except Exception:
         pass
     mode = body.get("mode", "all")
-    result = dialer.rerun_batch(batch_id, mode=mode)
+    d = resolve_dialer(request, operator=body.get("operator"))
+    result = d.rerun_batch(batch_id, mode=mode)
     return result
 
 # Delete a campaign batch
 @app.delete("/api/campaign/batches/{batch_id}")
-async def delete_campaign_batch(batch_id: str):
+async def delete_campaign_batch(batch_id: str, request: Request):
     success = db.delete_batch(batch_id)
-    if dialer.current_batch_id == batch_id:
-        dialer.reset()
+    d = resolve_dialer(request)
+    if d.current_batch_id == batch_id:
+        d.reset()
     return {"ok": success}
 
 # Proxy authenticated audio recording from Vobiz

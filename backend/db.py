@@ -418,7 +418,9 @@ def record_call_start(
         try:
             update_op: Dict[str, Any] = {"$setOnInsert": initial_doc}
             if batch_id:
-                update_op["$set"] = {"batch_id": batch_id, "batchId": batch_id, "campaignId": batch_id}
+                initial_doc["batch_id"] = batch_id
+                initial_doc["batchId"] = batch_id
+                initial_doc["campaignId"] = batch_id
             col.update_one({"call_uuid": call_uuid}, update_op, upsert=True)
         except Exception as exc:
             logger.error(f"Failed to record call start for {call_uuid}: {exc}")
@@ -1334,6 +1336,37 @@ def fetch_crm_from_telephony_calls(
         })
 
     return results
+
+# Retrieve all unique 10-digit phone numbers already called or present in batches
+def get_existing_called_numbers() -> Dict[str, Any]:
+    called_numbers = set()
+    col = get_collection()
+    if col is not None:
+        try:
+            for p in col.distinct("customerNumber"):
+                d = "".join(c for c in str(p or "") if c.isdigit())[-10:]
+                if len(d) == 10:
+                    called_numbers.add(d)
+            for p in col.distinct("phone_number"):
+                d = "".join(c for c in str(p or "") if c.isdigit())[-10:]
+                if len(d) == 10:
+                    called_numbers.add(d)
+        except Exception as exc:
+            logger.error(f"Failed to fetch called numbers from vobiz_ai_calls: {exc}")
+
+    b_col = get_batches_collection()
+    if b_col is not None:
+        try:
+            for b in b_col.find({}, {"leads.phone_number": 1, "leads.customerNumber": 1}):
+                for lead in b.get("leads", []):
+                    num = lead.get("phone_number") or lead.get("customerNumber")
+                    d = "".join(c for c in str(num or "") if c.isdigit())[-10:]
+                    if len(d) == 10:
+                        called_numbers.add(d)
+        except Exception as exc:
+            logger.error(f"Failed to fetch batch leads for exclusion: {exc}")
+
+    return {"numbers": list(called_numbers), "total": len(called_numbers)}
 
 # Query inbound missed calls from telephony_calls SSOT
 def fetch_crm_missed_calls(

@@ -103,7 +103,7 @@ class OutboundDialer:
             logger.info(f"Appended {added_count} leads to running batch {batch_id} without stopping queue")
             return batch_id
 
-        batch_id = f"BATCH-{datetime_now_str()}"
+        batch_id = f"BATCH-{self.operator.upper()}-{datetime_now_str()}"
         self.current_batch_id = batch_id
         self.queue.clear()
 
@@ -520,5 +520,3 @@ dialer = manager.get_dialer("default")
 # Generate compact ISO-like timestamp string
 def datetime_now_str() -> str:
     return time.strftime("%Y%m%d-%H%M%S")
-
-dialer = OutboundDialer()
