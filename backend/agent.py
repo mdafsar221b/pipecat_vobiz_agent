@@ -189,10 +189,11 @@ async def transcribe_audio_bytes_with_gemini(audio_bytes: bytes, content_type: s
         raise ValueError("No Gemini API keys configured in environment.")
 
     mime_type = detect_audio_mime_type(audio_bytes, content_type)
-    primary_model = os.getenv("GEMINI_TRANSCRIBE_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    primary_model = os.getenv("GEMINI_TRANSCRIBE_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
     candidate_models = [primary_model]
-    if "gemini-2.0-flash" not in candidate_models:
-        candidate_models.append("gemini-2.0-flash")
+    for fallback_model in ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash"):
+        if fallback_model not in candidate_models:
+            candidate_models.append(fallback_model)
 
     prompt = (
         "Listen carefully to this phone call recording between an AI voice agent ('Ananya' from Swargaseema) "
