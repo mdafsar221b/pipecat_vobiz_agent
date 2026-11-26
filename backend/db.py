@@ -505,6 +505,26 @@ def append_transcript(call_uuid: str, role: str, text: str) -> None:
         except Exception as exc:
             logger.error(f"Failed to append transcript for {call_uuid}: {exc}")
 
+# Persist on-demand audio-to-transcript turns for a specific call
+def save_manual_transcript(call_uuid: str, turns: List[Dict[str, Any]]) -> None:
+    col = get_collection()
+    if col is not None:
+        try:
+            col.update_one(
+                {"call_uuid": call_uuid},
+                {
+                    "$set": {
+                        "manual_transcripts": turns,
+                        "has_manual_transcript": True,
+                        "manual_transcribed_at": now_iso(),
+                        "updated_at": now_iso(),
+                    }
+                },
+                upsert=True,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to save manual transcript for {call_uuid}: {exc}")
+
 # Convert non-English callback terms or names to clean English
 def sanitize_to_english_metadata(name: Optional[str], cb_time: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     out_name = name
@@ -912,8 +932,12 @@ def get_call(call_uuid: str) -> Optional[Dict[str, Any]]:
         try:
             doc = col.find_one({"call_uuid": call_uuid}, {"_id": 0})
             if doc:
+                manual_turns = doc.get("manual_transcripts") or []
                 if is_transcript_enabled():
-                    doc["turns"] = doc.get("transcripts", [])
+                    doc["turns"] = doc.get("transcripts") or manual_turns
+                elif manual_turns:
+                    doc["turns"] = manual_turns
+                    doc["transcripts"] = []
                 else:
                     doc["transcripts"] = []
                     doc["turns"] = []
@@ -1038,6 +1062,7 @@ def get_paginated_calls(
         projection = {
             "_id": 0,
             "transcripts": 0,
+            "manual_transcripts": 0,
             "callFlow": 0,
             "events": 0,
             "metadata": 0,
@@ -1233,6 +1258,7 @@ def get_batch_detail(batch_id: str) -> Dict[str, Any]:
             projection = {
                 "_id": 0,
                 "transcripts": 0,
+                "manual_transcripts": 0,
                 "callFlow": 0,
                 "events": 0,
                 "metadata": 0,

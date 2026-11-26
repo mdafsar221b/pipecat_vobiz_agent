@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl
 
 from dotenv import load_dotenv
@@ -59,7 +59,7 @@ if "sentencex" not in sys.modules:
 import db
 import diagnostics
 import vobiz_api
-from agent import run_vobiz_agent
+from agent import run_vobiz_agent, transcribe_audio_bytes_with_gemini
 from dialer import dialer, manager as dialer_manager
 
 # Resolve dialer instance for the requesting operator
@@ -605,9 +605,8 @@ async def delete_campaign_batch(batch_id: str, request: Request):
         d.reset()
     return {"ok": success}
 
-# Proxy authenticated audio recording from Vobiz
-@app.get("/api/recording/{call_uuid}")
-async def get_recording(call_uuid: str):
+# Fetch authenticated call recording bytes from Vobiz
+async def fetch_call_recording_bytes(call_uuid: str) -> Tuple[Optional[bytes], Optional[str], Optional[str], int]:
     doc = db.get_call(call_uuid)
     rec_url = (doc.get("recording_url") or doc.get("recordingUrl")) if doc else None
 
@@ -629,22 +628,74 @@ async def get_recording(call_uuid: str):
             logger.warning(f"Error querying Vobiz recording API for {call_uuid}: {exc}")
 
     if not rec_url:
-        return Response(content="No recording available for this call", status_code=404)
+        return None, None, "No recording available for this call", 404
 
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             resp = await client.get(rec_url, headers=vobiz_api.get_headers())
             if resp.status_code != 200:
                 logger.warning(f"Recording fetch returned {resp.status_code} for {rec_url}")
-                return Response(content="Recording not available from provider", status_code=502)
-            return Response(
-                content=resp.content,
-                media_type=resp.headers.get("content-type", "audio/mpeg"),
-                headers={"Accept-Ranges": "bytes"},
-            )
+                return None, None, "Recording not available from provider", 502
+            return resp.content, resp.headers.get("content-type", "audio/mpeg"), None, 200
     except Exception as exc:
         logger.error(f"Failed to fetch recording {rec_url}: {exc}")
-        return Response(content="Failed to retrieve recording", status_code=502)
+        return None, None, "Failed to retrieve recording", 502
+
+# Proxy authenticated audio recording from Vobiz
+@app.get("/api/recording/{call_uuid}")
+async def get_recording(call_uuid: str):
+    content, media_type, err_msg, status_code = await fetch_call_recording_bytes(call_uuid)
+    if content is None:
+        return Response(content=err_msg or "No recording available", status_code=status_code)
+    return Response(
+        content=content,
+        media_type=media_type or "audio/mpeg",
+        headers={"Accept-Ranges": "bytes"},
+    )
+
+# Transcribe a specific call's recorded audio on-demand using Gemini
+@app.post("/api/calls/{call_uuid}/transcribe")
+async def transcribe_call_audio(call_uuid: str, request: Request):
+    force = False
+    try:
+        payload = await parse_params(request)
+        raw_force = payload.get("force")
+        if isinstance(raw_force, str):
+            force = raw_force.strip().lower() in ("1", "true", "yes")
+        else:
+            force = bool(raw_force)
+    except Exception:
+        pass
+
+    col = db.get_collection()
+    existing_doc = col.find_one({"call_uuid": call_uuid}, {"_id": 0, "manual_transcripts": 1}) if col is not None else None
+    cached_turns = (existing_doc or {}).get("manual_transcripts") or []
+    if cached_turns and not force:
+        return {
+            "ok": True,
+            "call_uuid": call_uuid,
+            "turns": cached_turns,
+            "cached": True,
+            "has_manual_transcript": True,
+        }
+
+    audio_bytes, media_type, err_msg, status_code = await fetch_call_recording_bytes(call_uuid)
+    if audio_bytes is None:
+        return JSONResponse(status_code=status_code, content={"ok": False, "error": err_msg or "No recording available for this call"})
+
+    try:
+        turns = await transcribe_audio_bytes_with_gemini(audio_bytes, media_type or "audio/mpeg")
+        db.save_manual_transcript(call_uuid, turns)
+        return {
+            "ok": True,
+            "call_uuid": call_uuid,
+            "turns": turns,
+            "cached": False,
+            "has_manual_transcript": True,
+        }
+    except Exception as exc:
+        logger.error(f"On-demand audio transcription failed for {call_uuid}: {exc}")
+        return JSONResponse(status_code=500, content={"ok": False, "error": f"Transcription failed: {exc}"})
 
 # Retrieve global disposition and status metrics for all calls
 @app.get("/api/calls/stats")

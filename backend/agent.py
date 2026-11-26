@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 from typing import Any, Callable, Dict, List, Optional
 from dotenv import load_dotenv
-from google.genai import Client
+from google.genai import Client, types
 from loguru import logger
 from starlette.websockets import WebSocket
 
@@ -161,6 +161,111 @@ def rotate_gemini_api_key(reason: str = "quota/error") -> str:
         f"🔄 [GEMINI KEY ROTATED] Reason: {reason} | [{old_idx}] {old_masked} -> [{new_idx}] {new_masked} (Available keys: {len(GEMINI_API_KEYS)})"
     )
     return GEMINI_API_KEYS[new_idx]
+
+# Detect clean audio MIME type from file magic bytes or HTTP Content-Type
+def detect_audio_mime_type(audio_bytes: bytes, content_type: str = "") -> str:
+    if audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE":
+        return "audio/wav"
+    if audio_bytes[:3] == b"ID3" or (len(audio_bytes) >= 2 and audio_bytes[0] == 0xFF and (audio_bytes[1] & 0xE0) == 0xE0):
+        return "audio/mpeg"
+    if audio_bytes[:4] == b"OggS":
+        return "audio/ogg"
+    if audio_bytes[:4] == b"fLaC":
+        return "audio/flac"
+    clean_ct = (content_type or "").split(";")[0].strip().lower()
+    if clean_ct.startswith("audio/"):
+        if clean_ct in ("audio/x-wav", "audio/wave"):
+            return "audio/wav"
+        if clean_ct == "audio/mp3":
+            return "audio/mpeg"
+        return clean_ct
+    return "audio/mpeg"
+
+# Transcribe a single call's recorded audio bytes on demand using Gemini multimodal generate_content
+async def transcribe_audio_bytes_with_gemini(audio_bytes: bytes, content_type: str = "") -> List[Dict[str, Any]]:
+    if not audio_bytes:
+        return []
+    if not GEMINI_API_KEYS:
+        raise ValueError("No Gemini API keys configured in environment.")
+
+    mime_type = detect_audio_mime_type(audio_bytes, content_type)
+    primary_model = os.getenv("GEMINI_TRANSCRIBE_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    candidate_models = [primary_model]
+    if "gemini-2.0-flash" not in candidate_models:
+        candidate_models.append("gemini-2.0-flash")
+
+    prompt = (
+        "Listen carefully to this phone call recording between an AI voice agent ('Ananya' from Swargaseema) "
+        "and a customer/caller.\n"
+        "Transcribe the complete conversation chronologically in the exact spoken language(s) "
+        "(Telugu, Hindi, English, or mixed as spoken).\n"
+        "Label each turn's role as 'agent' (the female AI voice agent speaking for Swargaseema) or 'caller' (the customer).\n"
+        "Return ONLY a valid JSON array of objects with keys 'role' ('agent' or 'caller') and 'text' (spoken words). "
+        "If there is no intelligible speech (only silence or ringing), return []."
+    )
+
+    last_error: Optional[Exception] = None
+    for model_name in candidate_models:
+        max_attempts = max(1, len(GEMINI_API_KEYS))
+        for attempt in range(max_attempts):
+            api_key = get_gemini_api_key()
+            try:
+                def _run_sync() -> str:
+                    client = Client(api_key=api_key)
+                    resp = client.models.generate_content(
+                        model=model_name,
+                        contents=[
+                            types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+                            prompt,
+                        ],
+                        config=types.GenerateContentConfig(
+                            temperature=0.1,
+                            response_mime_type="application/json",
+                        ),
+                    )
+                    return resp.text or "[]"
+
+                raw_text = await asyncio.to_thread(_run_sync)
+                cleaned = raw_text.strip()
+                if cleaned.startswith("```"):
+                    cleaned = cleaned.strip("`")
+                    if cleaned.lower().startswith("json"):
+                        cleaned = cleaned[4:].strip()
+
+                parsed = json.loads(cleaned)
+                if isinstance(parsed, dict):
+                    parsed = parsed.get("turns") or parsed.get("transcripts") or []
+                if not isinstance(parsed, list):
+                    return []
+
+                turns: List[Dict[str, Any]] = []
+                now_ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+                for item in parsed:
+                    if not isinstance(item, dict):
+                        continue
+                    role_raw = str(item.get("role", "")).strip().lower()
+                    role = "agent" if role_raw in ("agent", "ai", "assistant", "bot", "ananya") else "caller"
+                    txt = str(item.get("text") or item.get("content") or "").strip()
+                    if txt:
+                        turns.append({"role": role, "text": txt, "timestamp": now_ts})
+                return turns
+            except Exception as exc:
+                last_error = exc
+                err_str = str(exc).lower()
+                is_quota_or_auth = any(m in err_str for m in [
+                    "429", "resource_exhausted", "quota", "403", "permission_denied", "unauthenticated"
+                ])
+                if is_quota_or_auth and attempt < max_attempts - 1:
+                    rotate_gemini_api_key(f"On-demand transcription quota/auth error: {exc}")
+                    continue
+                is_model_error = any(m in err_str for m in ["404", "not_found", "not found", "unsupported"])
+                if is_model_error:
+                    logger.warning(f"Gemini transcribe model {model_name} unavailable ({exc}); trying fallback")
+                    break
+                raise
+    if last_error:
+        raise last_error
+    return []
 
 # Build and execute the real-time Pipecat agent for an incoming Vobiz stream
 async def run_vobiz_agent(

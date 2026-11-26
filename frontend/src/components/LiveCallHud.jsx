@@ -12,6 +12,7 @@ import {
   RefreshCw,
   X,
   Volume2,
+  Captions,
 } from 'lucide-react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from './ui/table';
 import { Badge } from './ui/badge';
@@ -42,6 +43,72 @@ export default function LiveCallHud({
   const [isPlaying, setIsPlaying] = useState(false);
   const [inspectingCall, setInspectingCall] = useState(null);
   const [activeDrawerTab, setActiveDrawerTab] = useState('transcript');
+  const [transcribingUuid, setTranscribingUuid] = useState(null);
+  const [transcribeError, setTranscribeError] = useState('');
+  const [transcriptOverrides, setTranscriptOverrides] = useState({});
+
+  const handleTranscribeCall = async (callObj, force = false) => {
+    const uuid = callObj?.call_uuid || callObj?.callId || callObj?.uuid;
+    if (!uuid || transcribingUuid === uuid) return;
+    setActiveDrawerTab('transcript');
+    setTranscribeError('');
+    setTranscribingUuid(uuid);
+    try {
+      const res = await fetch(`/api/calls/${encodeURIComponent(uuid)}/transcribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const turns = Array.isArray(data.turns) ? data.turns : [];
+      setTranscriptOverrides((prev) => ({ ...prev, [uuid]: turns }));
+      setInspectingCall((prev) =>
+        prev && (prev.call_uuid === uuid || prev.callId === uuid)
+          ? { ...prev, manual_transcripts: turns, has_manual_transcript: true, turns }
+          : prev
+      );
+    } catch (err) {
+      setTranscribeError(err.message || 'Failed to transcribe call audio');
+    } finally {
+      setTranscribingUuid((curr) => (curr === uuid ? null : curr));
+    }
+  };
+
+  const handleOpenInspect = async (callObj, { autoTranscribe = false } = {}) => {
+    setInspectingCall(callObj);
+    setTranscribeError('');
+    if (autoTranscribe) {
+      setActiveDrawerTab('transcript');
+    }
+    const uuid = callObj?.call_uuid || callObj?.callId || callObj?.uuid;
+    let resolvedCall = callObj;
+    if (uuid && (!callObj.turns?.length && !callObj.transcripts?.length && !callObj.manual_transcripts?.length)) {
+      try {
+        const res = await fetch(`/api/calls/${encodeURIComponent(uuid)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.ok && data.call) {
+            resolvedCall = { ...callObj, ...data.call };
+            setInspectingCall((prev) => (prev && (prev.call_uuid === uuid || prev.callId === uuid) ? { ...prev, ...data.call } : prev));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load call detail:', err);
+      }
+    }
+    if (autoTranscribe && uuid) {
+      const existing =
+        transcriptOverrides[uuid] ||
+        resolvedCall.manual_transcripts ||
+        (transcriptEnabled ? (resolvedCall.transcripts || resolvedCall.turns) : (resolvedCall.has_manual_transcript ? resolvedCall.turns : []));
+      if (!existing || existing.length === 0) {
+        handleTranscribeCall(resolvedCall, false);
+      }
+    }
+  };
 
   // Auto-scroll active call transcript container
   useEffect(() => {
@@ -63,7 +130,7 @@ export default function LiveCallHud({
         audioPlayerRef.current
           .play()
           .then(() => setIsPlaying(true))
-          .catch(() => {});
+          .catch(() => { });
       }
     } else {
       setPlayingUuid(callUuid);
@@ -297,7 +364,7 @@ export default function LiveCallHud({
                 <Button
                   size="xs"
                   variant="ghost"
-                  onClick={() => setInspectingCall(lc)}
+                  onClick={() => handleOpenInspect(lc)}
                   className="h-6 px-2 text-[11px] text-[#008792] hover:underline cursor-pointer"
                 >
                   Details &rarr;
@@ -384,7 +451,7 @@ export default function LiveCallHud({
                   return (
                     <TableRow
                       key={callUuid}
-                      onClick={() => setInspectingCall(c)}
+                      onClick={() => handleOpenInspect(c)}
                       className="cursor-pointer hover:bg-muted/50 transition-colors border-b border-border/60 text-xs group"
                     >
                       {/* Recipient */}
@@ -436,29 +503,47 @@ export default function LiveCallHud({
                         onClick={(e) => e.stopPropagation()}
                       >
                         {hasAudio ? (
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            onClick={(e) => handleTogglePlay(e, callUuid)}
-                            className={cn(
-                              'h-5 px-2 text-[10px] gap-1 font-semibold cursor-pointer',
-                              playingUuid === callUuid && isPlaying
-                                ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-                                : 'text-foreground hover:border-[#008792] hover:text-[#008792]'
-                            )}
-                          >
-                            {playingUuid === callUuid && isPlaying ? (
-                              <>
-                                <Pause className="w-2.5 h-2.5 fill-current" />
-                                <span>Pause</span>
-                              </>
-                            ) : (
-                              <>
-                                <Play className="w-2.5 h-2.5 fill-current" />
-                                <span>Play</span>
-                              </>
-                            )}
-                          </Button>
+                          <div className="inline-flex items-center gap-1">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={(e) => handleTogglePlay(e, callUuid)}
+                              className={cn(
+                                'h-5 px-2 text-[10px] gap-1 font-semibold cursor-pointer',
+                                playingUuid === callUuid && isPlaying
+                                  ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                                  : 'text-foreground hover:border-[#008792] hover:text-[#008792]'
+                              )}
+                            >
+                              {playingUuid === callUuid && isPlaying ? (
+                                <>
+                                  <Pause className="w-2.5 h-2.5 fill-current" />
+                                  <span>Pause</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Play className="w-2.5 h-2.5 fill-current" />
+                                  <span>Play</span>
+                                </>
+                              )}
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => handleOpenInspect(c, { autoTranscribe: true })}
+                              disabled={transcribingUuid === callUuid}
+                              className={cn(
+                                'h-5 px-2 text-[10px] gap-1 font-semibold cursor-pointer',
+                                (c.has_manual_transcript || transcriptOverrides[callUuid]?.length > 0)
+                                  ? 'border-[#008792]/40 bg-[#008792]/10 text-[#008792]'
+                                  : 'text-foreground hover:border-[#008792] hover:text-[#008792]'
+                              )}
+                              title="Transcribe this call's audio"
+                            >
+                              <Captions className={cn('w-2.5 h-2.5', transcribingUuid === callUuid && 'animate-pulse')} />
+                              <span>{transcribingUuid === callUuid ? '...' : 'Transcript'}</span>
+                            </Button>
+                          </div>
                         ) : (
                           <span className="text-muted-foreground font-mono text-[10px]">--</span>
                         )}
@@ -486,9 +571,16 @@ export default function LiveCallHud({
             const diag = inspectingCall.diagnostic || {};
             const diagConf = getDiagnosticConfig(diag.classification);
             const dur = inspectingCall.duration || 0;
-            const turns = transcriptEnabled ? (inspectingCall.turns || inspectingCall.transcripts || []) : [];
+            const targetUuid = inspectingCall.call_uuid || inspectingCall.lead_id || '';
+            const overrideTurns = transcriptOverrides[targetUuid];
+            const manualTurns = inspectingCall.manual_transcripts || [];
+            const liveTurns = transcriptEnabled
+              ? (inspectingCall.turns || inspectingCall.transcripts || [])
+              : (inspectingCall.has_manual_transcript ? (inspectingCall.turns || []) : []);
+            const turns = overrideTurns !== undefined ? overrideTurns : (manualTurns.length > 0 ? manualTurns : liveTurns);
             const hasAudio = dur > 0 || inspectingCall.recording_url;
-            const effectiveDrawerTab = transcriptEnabled ? activeDrawerTab : 'diag';
+            const isTranscribingThis = transcribingUuid === targetUuid;
+            const effectiveDrawerTab = activeDrawerTab;
 
             return (
               <div className="flex flex-col h-full overflow-hidden">
@@ -548,54 +640,73 @@ export default function LiveCallHud({
 
                 {/* Audio Player Bar */}
                 {hasAudio && inspectingCall.call_uuid && (
-                  <div className="px-4 py-2 border-b border-border bg-muted/20 shrink-0 flex items-center justify-between">
+                  <div className="px-4 py-2 border-b border-border bg-muted/20 shrink-0 flex items-center justify-between gap-2">
                     <span className="text-[11px] font-semibold text-foreground flex items-center gap-1.5">
                       <Volume2 className="w-3.5 h-3.5 text-[#008792]" />
                       <span>Audio Recording</span>
                     </span>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      onClick={(e) => handleTogglePlay(e, inspectingCall.call_uuid)}
-                      className={cn(
-                        'h-6 px-2 text-[11px] gap-1 font-semibold cursor-pointer',
-                        playingUuid === inspectingCall.call_uuid && isPlaying
-                          ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-                          : 'text-foreground hover:border-[#008792] hover:text-[#008792]'
-                      )}
-                    >
-                      {playingUuid === inspectingCall.call_uuid && isPlaying ? (
-                        <>
-                          <Pause className="w-3 h-3 fill-current" />
-                          <span>Pause Audio</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play className="w-3 h-3 fill-current" />
-                          <span>Play Audio</span>
-                        </>
-                      )}
-                    </Button>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() => handleTranscribeCall(inspectingCall, turns.length > 0)}
+                        disabled={isTranscribingThis}
+                        className="h-6 px-2 text-[11px] gap-1 font-semibold border-[#008792]/40 text-[#008792] hover:bg-[#008792]/10 cursor-pointer"
+                      >
+                        {isTranscribingThis ? (
+                          <>
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                            <span>Transcribing...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Captions className="w-3 h-3" />
+                            <span>{turns.length > 0 ? 'Re-transcribe' : 'Audio to Transcript'}</span>
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={(e) => handleTogglePlay(e, inspectingCall.call_uuid)}
+                        className={cn(
+                          'h-6 px-2 text-[11px] gap-1 font-semibold cursor-pointer',
+                          playingUuid === inspectingCall.call_uuid && isPlaying
+                            ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                            : 'text-foreground hover:border-[#008792] hover:text-[#008792]'
+                        )}
+                      >
+                        {playingUuid === inspectingCall.call_uuid && isPlaying ? (
+                          <>
+                            <Pause className="w-3 h-3 fill-current" />
+                            <span>Pause Audio</span>
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-3 h-3 fill-current" />
+                            <span>Play Audio</span>
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </div>
                 )}
 
                 {/* Drawer Tabs Header */}
                 <div className="px-4 pt-2 border-b border-border bg-muted/10 shrink-0">
                   <div className="flex items-center gap-1">
-                    {transcriptEnabled && (
-                      <button
-                        type="button"
-                        onClick={() => setActiveDrawerTab('transcript')}
-                        className={cn(
-                          'px-3 py-1.5 text-xs font-semibold border-b-2 transition-colors cursor-pointer',
-                          effectiveDrawerTab === 'transcript'
-                            ? 'border-[#008792] text-[#008792]'
-                            : 'border-transparent text-muted-foreground hover:text-foreground'
-                        )}
-                      >
-                        Conversation Transcript ({turns.length})
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => setActiveDrawerTab('transcript')}
+                      className={cn(
+                        'px-3 py-1.5 text-xs font-semibold border-b-2 transition-colors cursor-pointer',
+                        effectiveDrawerTab === 'transcript'
+                          ? 'border-[#008792] text-[#008792]'
+                          : 'border-transparent text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      Conversation Transcript ({turns.length})
+                    </button>
                     <button
                       type="button"
                       onClick={() => setActiveDrawerTab('diag')}
@@ -614,7 +725,28 @@ export default function LiveCallHud({
                 {/* Drawer Tab Content */}
                 <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2.5">
                   {effectiveDrawerTab === 'transcript' ? (
-                    turns.length > 0 ? (
+                    isTranscribingThis ? (
+                      <div className="text-center py-10 text-muted-foreground">
+                        <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
+                        <p className="text-xs font-semibold text-foreground">Transcribing call audio with Gemini AI...</p>
+                        <p className="text-[11px] mt-1">Only this recording is being transcribed to keep costs low.</p>
+                      </div>
+                    ) : transcribeError ? (
+                      <div className="text-center py-10 space-y-2.5">
+                        <p className="text-xs font-semibold text-rose-600">{transcribeError}</p>
+                        {hasAudio && (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() => handleTranscribeCall(inspectingCall, true)}
+                            className="gap-1 text-xs border-[#008792]/40 text-[#008792] cursor-pointer"
+                          >
+                            <Captions className="w-3.5 h-3.5" />
+                            <span>Retry Audio to Transcript</span>
+                          </Button>
+                        )}
+                      </div>
+                    ) : turns.length > 0 ? (
                       turns.map((t, idx) => {
                         const isAgent = t.role === 'agent';
                         return (
@@ -639,9 +771,25 @@ export default function LiveCallHud({
                         );
                       })
                     ) : (
-                      <p className="text-xs text-muted-foreground text-center py-8">
-                        No dialog turns captured for this session.
-                      </p>
+                      <div className="text-center py-8 space-y-2.5 text-muted-foreground">
+                        <Captions className="w-7 h-7 mx-auto opacity-45 text-[#008792]" />
+                        <p className="text-xs font-semibold text-foreground">
+                          {hasAudio
+                            ? (transcriptEnabled ? 'No live dialog turns captured' : 'Live transcript is OFF (Low-Cost Mode)')
+                            : 'No dialog turns captured for this session.'}
+                        </p>
+                        {hasAudio && (
+                          <Button
+                            size="xs"
+                            onClick={() => handleTranscribeCall(inspectingCall, false)}
+                            disabled={isTranscribingThis}
+                            className="bg-[#008792] hover:bg-[#007680] text-white gap-1.5 text-xs font-semibold cursor-pointer"
+                          >
+                            <Captions className="w-3.5 h-3.5" />
+                            <span>Audio to Transcript</span>
+                          </Button>
+                        )}
+                      </div>
                     )
                   ) : (
                     <div className="space-y-3 text-xs">
