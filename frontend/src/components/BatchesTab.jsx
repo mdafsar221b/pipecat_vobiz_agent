@@ -19,6 +19,7 @@ import {
   ThumbsUp,
   FileSpreadsheet,
   Upload,
+  Captions,
 } from 'lucide-react';
 import {
   Table,
@@ -130,6 +131,8 @@ export default function BatchesTab({
   // Batch Detail Selection State
   const [selectedBatchUuids, setSelectedBatchUuids] = useState(new Set());
   const [isQueueingBatchCalls, setIsQueueingBatchCalls] = useState(false);
+  const [isBatchTranscribing, setIsBatchTranscribing] = useState(false);
+  const [batchTranscribeProgress, setBatchTranscribeProgress] = useState('');
   const [isResumingBatch, setIsResumingBatch] = useState(false);
   const [isRerunningBatch, setIsRerunningBatch] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -552,6 +555,65 @@ export default function BatchesTab({
     const isCompleted = b.status === 'completed';
 
     const selectedBatchCalls = calls.filter((c) => selectedBatchUuids.has(c.call_uuid));
+    const hasAudioForBatchCall = (c) => {
+      const uuid = String(c?.call_uuid || '');
+      if (!uuid || uuid.startsWith('pending-')) return false;
+      return Boolean(c?.recording_url || c?.recordingUrl || (Number(c?.duration) || 0) > 0 || c?.has_manual_transcript);
+    };
+    const transcribableBatchCalls = (selectedBatchCalls.length > 0 ? selectedBatchCalls : filteredBatchCalls).filter(hasAudioForBatchCall);
+
+    const handleBatchAudioToTranscript = async () => {
+      if (isBatchTranscribing || transcribableBatchCalls.length === 0) return;
+      setIsBatchTranscribing(true);
+      let successCount = 0;
+      let failCount = 0;
+      const total = transcribableBatchCalls.length;
+      try {
+        for (let i = 0; i < total; i += 1) {
+          const c = transcribableBatchCalls[i];
+          const uuid = c.call_uuid;
+          setBatchTranscribeProgress(`${i + 1}/${total}`);
+          if (c.has_manual_transcript && c.manual_transcripts?.length > 0) {
+            successCount += 1;
+            continue;
+          }
+          try {
+            const res = await fetch(`/api/calls/${encodeURIComponent(uuid)}/transcribe`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ force: false }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.ok) {
+              const turns = Array.isArray(data.turns) ? data.turns : [];
+              successCount += 1;
+              setBatchDetail((prev) => {
+                if (!prev || !prev.calls) return prev;
+                return {
+                  ...prev,
+                  calls: prev.calls.map((item) =>
+                    item.call_uuid === uuid
+                      ? { ...item, manual_transcripts: turns, has_manual_transcript: true, turns }
+                      : item
+                  ),
+                };
+              });
+            } else {
+              failCount += 1;
+            }
+          } catch {
+            failCount += 1;
+          }
+        }
+        setBatchTranscribeProgress(
+          failCount > 0 ? `Done (${successCount} ok, ${failCount} failed)` : `Done (${successCount}/${total})`
+        );
+        setTimeout(() => setBatchTranscribeProgress(''), 4000);
+      } finally {
+        setIsBatchTranscribing(false);
+      }
+    };
+
     const allBatchSelected =
       filteredBatchCalls.length > 0 &&
       filteredBatchCalls.every((c) => selectedBatchUuids.has(c.call_uuid));
@@ -660,6 +722,27 @@ export default function BatchesTab({
               <span className={`w-1.5 h-1.5 ${isCompleted ? 'bg-slate-400' : 'bg-emerald-500 animate-pulse'}`} />
               {(b.status || 'ACTIVE').toUpperCase()}
             </span>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={handleBatchAudioToTranscript}
+              disabled={isBatchTranscribing || transcribableBatchCalls.length === 0}
+              className="h-7 px-2 gap-1.5 text-xs font-semibold border-[#008792]/40 text-[#008792] hover:bg-[#008792]/10 cursor-pointer disabled:opacity-45"
+              title={
+                selectedBatchCalls.length > 0
+                  ? 'Generate Audio-to-Transcript for selected calls in this batch'
+                  : 'Generate Audio-to-Transcript for filtered calls with audio in this batch'
+              }
+            >
+              <Captions className={cn('w-3.5 h-3.5', isBatchTranscribing && 'animate-pulse')} />
+              <span>
+                {isBatchTranscribing
+                  ? `Transcribing ${batchTranscribeProgress}...`
+                  : batchTranscribeProgress
+                  ? batchTranscribeProgress
+                  : `Audio to Transcript (${transcribableBatchCalls.length})`}
+              </span>
+            </Button>
             <Button
               size="xs"
               variant="outline"
@@ -1246,6 +1329,18 @@ export default function BatchesTab({
                             <span>Resume ({uncalledCount})</span>
                           </Button>
                         ) : null}
+                        {dialed > 0 && (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() => openBatchDetail(b.batch_id)}
+                            className="h-6 gap-1 px-2 text-[11px] font-semibold border-[#008792]/40 text-[#008792] hover:bg-[#008792]/10 cursor-pointer"
+                            title="Open batch to transcribe individual call recordings"
+                          >
+                            <Captions className="w-3 h-3" />
+                            <span>Transcript</span>
+                          </Button>
+                        )}
                         <Button
                           size="xs"
                           variant="ghost"

@@ -346,6 +346,10 @@ export default function CallsTable({
                 const inBytes = am.inbound_bytes || 0;
                 const outBytes = am.outbound_bytes || 0;
                 const hasRecording = Boolean(recUrl || (durationSec > 5 && (inBytes > 0 || outBytes > 0)));
+                const canTranscribe = Boolean(
+                  !String(callUuid).startsWith('pending-') &&
+                  (hasRecording || durationSec > 0 || entry.has_manual_transcript)
+                );
 
                 const isChecked = selectedUuids ? selectedUuids.has(callUuid) : false;
                 const isSelected = inspectingCall?.call_uuid === callUuid;
@@ -466,26 +470,28 @@ export default function CallsTable({
                             >
                               <Download className="w-3 h-3" />
                             </a>
-
-                            <Button
-                              size="xs"
-                              variant="outline"
-                              onClick={() => handleOpenInspect(callWithOverrides, { autoTranscribe: true })}
-                              disabled={transcribingUuid === callUuid}
-                              className={cn(
-                                "h-6 px-2 gap-1 text-[11px] font-medium cursor-pointer",
-                                (entry.has_manual_transcript || transcriptOverrides[callUuid]?.length > 0)
-                                  ? "border-[#008792]/40 bg-[#008792]/10 text-[#008792]"
-                                  : "hover:border-[#008792] hover:text-[#008792]"
-                              )}
-                              title="Transcribe this call's audio"
-                            >
-                              <Captions className={cn("w-3 h-3", transcribingUuid === callUuid && "animate-pulse")} />
-                              <span>{transcribingUuid === callUuid ? '...' : 'Transcript'}</span>
-                            </Button>
                           </>
                         ) : (
                           <span className="text-[11px] text-muted-foreground/40 italic pr-1">--</span>
+                        )}
+
+                        {canTranscribe && (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() => handleOpenInspect(callWithOverrides, { autoTranscribe: true })}
+                            disabled={transcribingUuid === callUuid}
+                            className={cn(
+                              "h-6 px-2 gap-1 text-[11px] font-medium cursor-pointer",
+                              (entry.has_manual_transcript || transcriptOverrides[callUuid]?.length > 0)
+                                ? "border-[#008792]/40 bg-[#008792]/10 text-[#008792]"
+                                : "hover:border-[#008792] hover:text-[#008792]"
+                            )}
+                            title="Transcribe this call's audio"
+                          >
+                            <Captions className={cn("w-3 h-3", transcribingUuid === callUuid && "animate-pulse")} />
+                            <span>{transcribingUuid === callUuid ? '...' : 'Transcript'}</span>
+                          </Button>
                         )}
 
                         {/* Quick Edit Disposition & Callback */}
@@ -547,6 +553,11 @@ export default function CallsTable({
             const custName = overrides.customer_name !== undefined ? overrides.customer_name : (inspectingCall.customer_name || '');
             const callForEdit = { ...inspectingCall, ...overrides, disposition: effectiveDisp, callback_time: cbTime, customer_name: custName };
             const hasRec = Boolean(recUrl || (durSec > 5 && (inB > 0 || outB > 0)));
+            const canTranscribeDrawer = Boolean(
+              targetUuid &&
+              !String(targetUuid).startsWith('pending-') &&
+              (hasRec || durSec > 0 || inspectingCall.has_manual_transcript)
+            );
             const overrideTurns = transcriptOverrides[targetUuid];
             const manualTurns = inspectingCall.manual_transcripts || [];
             const liveTurns = transcriptEnabled
@@ -701,9 +712,23 @@ export default function CallsTable({
                       />
                     </div>
                   ) : (
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground py-0.5">
-                      <Volume2 className="w-3.5 h-3.5 text-muted-foreground/60" />
-                      <span>No audio recording available for this call session</span>
+                    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground py-0.5">
+                      <div className="flex items-center gap-2">
+                        <Volume2 className="w-3.5 h-3.5 text-muted-foreground/60" />
+                        <span>No audio recording URL cached yet</span>
+                      </div>
+                      {canTranscribeDrawer && (
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => handleTranscribeCall(inspectingCall, turns.length > 0)}
+                          disabled={isTranscribingThis}
+                          className="h-6 px-2 gap-1 text-[11px] font-semibold border-[#008792]/40 text-[#008792] hover:bg-[#008792]/10 cursor-pointer"
+                        >
+                          <Captions className="w-3 h-3" />
+                          <span>{isTranscribingThis ? 'Transcribing...' : (turns.length > 0 ? 'Re-transcribe' : 'Audio to Transcript')}</span>
+                        </Button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -752,7 +777,7 @@ export default function CallsTable({
                     ) : transcribeError ? (
                       <div className="text-center py-12 px-4 space-y-3">
                         <p className="text-xs font-semibold text-rose-600">{transcribeError}</p>
-                        {hasRec && (
+                        {canTranscribeDrawer && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -808,17 +833,17 @@ export default function CallsTable({
                         <Captions className="w-8 h-8 mx-auto opacity-45 text-[#008792]" />
                         <div>
                           <p className="text-xs font-semibold text-foreground">
-                            {hasRec
+                            {canTranscribeDrawer
                               ? (transcriptEnabled ? 'No live dialog turns captured' : 'Live transcript is OFF (Low-Cost Mode)')
                               : 'No dialog turns recorded'}
                           </p>
                           <p className="text-[11px] mt-1">
-                            {hasRec
+                            {canTranscribeDrawer
                               ? 'Click below to convert this call audio recording into a transcript.'
                               : 'This call was either unanswered or has no audio recording.'}
                           </p>
                         </div>
-                        {hasRec && (
+                        {canTranscribeDrawer && (
                           <Button
                             size="sm"
                             onClick={() => handleTranscribeCall(inspectingCall, false)}
