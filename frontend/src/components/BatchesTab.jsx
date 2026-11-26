@@ -115,6 +115,7 @@ export default function BatchesTab({
   onQueueLeads,
   templates = [],
   selectedTemplateId = 'production_callback_conversion',
+  onNavigateToLive,
 }) {
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [batchDetail, setBatchDetail] = useState(null);
@@ -228,10 +229,10 @@ export default function BatchesTab({
       });
       const data = await res.json();
       if (data.ok) {
-        alert(`Resumed batch! ${data.resumed} pending leads loaded and dialing resumed.`);
         onRefreshCampaign?.();
         onRefreshBatches?.();
         if (targetId) openBatchDetail(targetId);
+        onNavigateToLive?.();
       } else {
         alert(data.error || 'Failed to resume batch.');
       }

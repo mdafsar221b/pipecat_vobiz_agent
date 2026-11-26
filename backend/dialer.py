@@ -308,11 +308,14 @@ class OutboundDialer:
         # Calculate batch-wise metrics from MongoDB for current batch
         batch_metrics = db.get_batch_metrics(self.current_batch_id)
         pending_in_queue = sum(1 for item in self.queue if item["status"] == "pending")
-        total_leads = len(self.queue) if len(self.queue) > 0 else (getattr(self, "total_batch_leads", 0) or batch_metrics.get("dialed", 0))
+        total_leads = getattr(self, "total_batch_leads", 0) or (batch_metrics.get("dialed", 0) + pending_in_queue)
+        if total_leads == 0:
+            total_leads = len(self.queue)
 
         return {
             "total": total_leads,
             "pending": pending_in_queue,
+            "dialed": batch_metrics.get("dialed", 0),
             "dialing": is_dialing,
             "in_call": is_incall,
             "active": 1 if self.active_call else 0,
@@ -544,6 +547,8 @@ class OutboundDialer:
             "next_in_queue": next_lead,
             "did": os.getenv("FROM_NUMBER", ""),
             "selected_template_id": self.selected_template_id,
+            "current_batch_id": self.current_batch_id,
+            "batch_id": self.current_batch_id,
         }
 
     # Set active campaign template for ad-hoc dials and upcoming batches

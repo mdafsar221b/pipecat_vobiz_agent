@@ -589,6 +589,7 @@ export default function App() {
                     onQueueLeads={handleQueueLeads}
                     templates={templates}
                     selectedTemplateId={selectedTemplateId}
+                    onNavigateToLive={() => setActiveNav('live')}
                   />
                 </ErrorBoundary>
               </div>

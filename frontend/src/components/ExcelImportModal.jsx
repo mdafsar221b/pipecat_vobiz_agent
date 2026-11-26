@@ -173,20 +173,32 @@ export default function ExcelImportModal({
     return normalizeLeadRows(parsedData.rows, mapping);
   }, [parsedData, mapping]);
 
-  // Extract distinct dispositions from mapped disposition column
+  // Extract distinct dispositions from mapped disposition column, calculating both total and fresh remaining counts
   const availableDispositions = useMemo(() => {
     if (!parsedData?.rows || !mapping.notes) return [];
     const counts = {};
-    for (const row of parsedData.rows) {
-      const val = String(row[mapping.notes] || '').trim();
-      if (val) {
-        counts[val] = (counts[val] || 0) + 1;
+    for (const lead of normalized.validLeads) {
+      const val = String(lead.rawRow?.[mapping.notes] || lead.crm_disposition || '').trim();
+      if (!val) continue;
+      if (!counts[val]) {
+        counts[val] = { total: 0, fresh: 0 };
+      }
+      counts[val].total += 1;
+      const digits = String(lead.phone_number || '').replace(/\D/g, '').slice(-10);
+      const isCalled = digits && dialedNumbersSet.has(digits);
+      if (!isCalled) {
+        counts[val].fresh += 1;
       }
     }
     return Object.entries(counts)
-      .map(([name, count]) => ({ name, count }))
+      .map(([name, data]) => ({
+        name,
+        total: data.total,
+        fresh: data.fresh,
+        count: excludeCalled ? data.fresh : data.total,
+      }))
       .sort((a, b) => b.count - a.count);
-  }, [parsedData, mapping.notes]);
+  }, [normalized.validLeads, mapping.notes, dialedNumbersSet, excludeCalled]);
 
   // Apply disposition filtering, duplicate exclusion, and slicing
   const filteredLeads = useMemo(() => {
@@ -629,8 +641,14 @@ export default function ExcelImportModal({
                             )}
                           >
                             <span>{d.name}</span>
-                            <span className={cn('text-[10px] font-mono opacity-80', isSelected ? 'text-white' : 'text-muted-foreground')}>
-                              ({d.count})
+                            <span className={cn('text-[10px] font-mono opacity-90', isSelected ? 'text-white' : 'text-muted-foreground')}>
+                              {excludeCalled && d.fresh !== d.total ? (
+                                <span title={`${d.fresh} fresh uncalled out of ${d.total} total in file`}>
+                                  ({d.fresh} left)
+                                </span>
+                              ) : (
+                                <span>({d.total})</span>
+                              )}
                             </span>
                           </button>
                         );

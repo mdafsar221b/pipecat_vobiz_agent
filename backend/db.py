@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 from loguru import logger
+from bson import ObjectId
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.collection import Collection
 from pymongo.database import Database
@@ -986,6 +987,10 @@ def get_paginated_calls(
             # Fallback callback time from callbackSchedule.preferredTime
             if not c.get("callback_time"):
                 c["callback_time"] = (c.get("callbackSchedule") or {}).get("preferredTime") or ""
+            # Sanitize any ObjectId or non-serializable fields
+            for k, v in list(c.items()):
+                if isinstance(v, ObjectId):
+                    c[k] = str(v)
 
         pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
         return {
