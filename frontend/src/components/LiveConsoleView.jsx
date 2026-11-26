@@ -51,6 +51,7 @@ export default function LiveConsoleView({
   onRefreshBatches,
   completedCalls = [],
   onRefreshLogs,
+  transcriptEnabled = false,
 }) {
   const [isDeskOpen, setIsDeskOpen] = useState(false);
 
@@ -180,6 +181,7 @@ export default function LiveConsoleView({
           lastCompletedCall={lastCompletedCall}
           completedCalls={completedCalls}
           onRefreshLogs={onRefreshLogs}
+          transcriptEnabled={transcriptEnabled}
         />
       </div>
 

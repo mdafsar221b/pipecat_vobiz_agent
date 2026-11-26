@@ -173,8 +173,12 @@ async def run_vobiz_agent(
     vobiz_auth_token: Optional[str] = None,
 ) -> None:
     tracer = diagnostics.get_tracer(call_uuid, phone_number, batch_id=batch_id)
+    transcript_enabled = db.is_transcript_enabled()
     asyncio.create_task(asyncio.to_thread(db.record_call_start, call_uuid, phone_number=phone_number, batch_id=batch_id))
-    logger.info(f"Starting Pipecat voice agent for call {call_uuid} ({phone_number}, batch={batch_id}, template={template_id})")
+    logger.info(
+        f"Starting Pipecat voice agent for call {call_uuid} ({phone_number}, batch={batch_id}, template={template_id}, "
+        f"transcript={'ENABLED' if transcript_enabled else 'DISABLED - low-cost Gemini mode'})"
+    )
 
     # Resolve dynamic campaign template and greeting for this batch or call
     batch_doc = db.get_batch(batch_id) if batch_id else None
@@ -247,12 +251,14 @@ async def run_vobiz_agent(
     is_agent_speaking: bool = False
     last_customer_speech_time: List[float] = [0.0]
     is_customer_speaking: List[bool] = [False]
+    speech_frames_streak: List[int] = [0]
     vad_buffer: bytearray = bytearray()
     vad_analyzer = SileroVADAnalyzer(sample_rate=16000)
     vad_analyzer.set_sample_rate(16000)
 
     # Passive Silero VAD monitor for real-time customer voice detection
     def handle_inbound_pcm(chunk: bytes):
+        nonlocal silence_state
         vad_buffer.extend(chunk)
         while len(vad_buffer) >= 1024:
             window = bytes(vad_buffer[:1024])
@@ -261,8 +267,21 @@ async def run_vobiz_agent(
             if conf >= 0.45:
                 last_customer_speech_time[0] = time.time()
                 is_customer_speaking[0] = True
-            elif time.time() - last_customer_speech_time[0] > 0.6:
-                is_customer_speaking[0] = False
+                if conf >= 0.55 and not is_agent_speaking:
+                    speech_frames_streak[0] += 1
+                    if speech_frames_streak[0] >= 6:
+                        tracer.caller_speech_detected = True
+                        if not transcript_enabled and not farewell_concluded and silence_state != "TERMINATED":
+                            if silence_hangup_task[0] and not silence_hangup_task[0].done():
+                                silence_hangup_task[0].cancel()
+                            if silence_state in ("STAGE_1_WAITING", "STAGE_2_WAITING", "PROACTIVE_PROMPT_PENDING", "CLOSING_PENDING"):
+                                start_silence_timer(stage=1, timeout_sec=15.0)
+                else:
+                    speech_frames_streak[0] = 0
+            else:
+                speech_frames_streak[0] = 0
+                if time.time() - last_customer_speech_time[0] > 0.6:
+                    is_customer_speaking[0] = False
 
     serializer.on_inbound_audio = handle_inbound_pcm
 
@@ -467,6 +486,10 @@ async def run_vobiz_agent(
     # Automatic fallback rotation: if initial connection fails due to quota or auth, retry with fallback keys
     orig_conn_task_handler = llm._connection_task_handler
     async def resilient_connection_task_handler(config):
+        if not transcript_enabled:
+            # Omit input/output audio transcription from Gemini Live setup to eliminate transcription token cost
+            config.input_audio_transcription = None
+            config.output_audio_transcription = None
         max_attempts = len(GEMINI_API_KEYS)
         for attempt in range(max_attempts):
             try:
@@ -523,18 +546,22 @@ async def run_vobiz_agent(
         if silence_state in ("STAGE_2_WAITING", "CLOSING_PENDING"):
             tracer.record_event(
                 "disconnect_cancelled_customer_spoke",
-                {"previous_state": silence_state, "text": (message.content or "")[:60]},
+                {"previous_state": silence_state, "text": ((message.content or "")[:60] if transcript_enabled else "")},
             )
         silence_state = "IDLE"
 
         if message and message.content:
             text = message.content.strip()
-            logger.info(f"[Caller] {text}")
             tracer.turns_count += 1
+            tracer.caller_speech_detected = True
             current_language = detect_spoken_language(text, current_language)
-            tracer.record_event("customer_turn_completed", {"text": text[:60]})
-            tracer.record_event("meaningful_speech_detected", {"text": text[:60], "language": current_language})
-            db.append_transcript(call_uuid, "caller", text)
+            if transcript_enabled and db.is_transcript_enabled():
+                logger.info(f"[Caller] {text}")
+                tracer.record_event("customer_turn_completed", {"text": text[:60]})
+                tracer.record_event("meaningful_speech_detected", {"text": text[:60], "language": current_language})
+                db.append_transcript(call_uuid, "caller", text)
+            else:
+                tracer.record_event("customer_turn_completed", {})
 
     # Pause silence timer while agent is speaking
     @assistant_aggregator.event_handler("on_assistant_turn_started")
@@ -551,13 +578,20 @@ async def run_vobiz_agent(
         nonlocal is_agent_speaking, silence_state, current_language
         is_agent_speaking = False
         serializer.agent_speaking_started_at = 0.0
-        if message and message.content:
-            text = message.content.strip()
-            logger.info(f"[Agent] {text}")
+        has_text = bool(message and message.content and message.content.strip())
+        if has_text or not transcript_enabled:
             tracer.turns_count += 1
-            tracer.record_event("agent_turn_completed", {"text": text[:60]})
-            db.append_transcript(call_uuid, "agent", text)
-            current_language = detect_spoken_language(text, current_language)
+            if has_text:
+                text = message.content.strip()
+                current_language = detect_spoken_language(text, current_language)
+                if transcript_enabled and db.is_transcript_enabled():
+                    logger.info(f"[Agent] {text}")
+                    tracer.record_event("agent_turn_completed", {"text": text[:60]})
+                    db.append_transcript(call_uuid, "agent", text)
+                else:
+                    tracer.record_event("agent_turn_completed", {})
+            else:
+                tracer.record_event("agent_turn_completed", {})
 
             if farewell_concluded or silence_state == "TERMINATED":
                 if silence_hangup_task[0] and not silence_hangup_task[0].done():
@@ -629,9 +663,12 @@ async def run_vobiz_agent(
         logger.info(f"[TIMING] [{call_uuid[:8]}] 4. Greeting playback start at {t_greet_start:.3f} (+{t_greet_start - t_ans:.3f}s from answer)")
         tracer.record_event("greeting_playback_start", {"elapsed_from_answer": round(t_greet_start - t_ans, 3)})
 
-        asyncio.create_task(asyncio.to_thread(db.append_transcript, call_uuid, "agent", active_greeting))
+        if transcript_enabled and db.is_transcript_enabled():
+            asyncio.create_task(asyncio.to_thread(db.append_transcript, call_uuid, "agent", active_greeting))
+            tracer.record_event("agent_turn_completed", {"text": active_greeting[:60]})
+        else:
+            tracer.record_event("agent_turn_completed", {})
         tracer.turns_count += 1
-        tracer.record_event("agent_turn_completed", {"text": active_greeting[:60]})
 
         chunk = 1280
         frame_sec = 0.04

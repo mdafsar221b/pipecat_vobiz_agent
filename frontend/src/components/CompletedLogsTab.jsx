@@ -25,6 +25,7 @@ export default function CompletedLogsTab({
   onRefreshLogs,
   onQueueLeads,
   searchText: externalSearchText = '',
+  transcriptEnabled = false,
 }) {
   // Date Filter State
   const [startDate, setStartDate] = useState('');
@@ -180,7 +181,7 @@ export default function CompletedLogsTab({
         const uuid = (entry.call_uuid || '').toLowerCase();
         const reason = (entry.reason || '').toLowerCase();
         const diag = (entry.diagnostic?.root_cause_summary || '').toLowerCase();
-        const inTurns = (entry.turns || []).some((t) => (t.text || '').toLowerCase().includes(q));
+        const inTurns = transcriptEnabled && (entry.turns || []).some((t) => (t.text || '').toLowerCase().includes(q));
         return (
           phone.includes(q) ||
           name.includes(q) ||
@@ -304,6 +305,7 @@ export default function CompletedLogsTab({
     durationFilter,
     sortBy,
     uniqueOnly,
+    transcriptEnabled,
   ]);
 
   // Selection helpers
@@ -565,7 +567,7 @@ export default function CompletedLogsTab({
               <option value="newest">Newest First</option>
               <option value="oldest">Oldest First</option>
               <option value="duration_desc">Longest Duration</option>
-              <option value="turns_desc">Most Turns</option>
+              {transcriptEnabled && <option value="turns_desc">Most Turns</option>}
             </select>
           </div>
         </div>
@@ -585,6 +587,7 @@ export default function CompletedLogsTab({
           triggerFetch(currentPage);
         }}
         containerClassName="flex-1 min-h-0 overflow-auto"
+        transcriptEnabled={transcriptEnabled}
       />
 
       {/* Pagination Footer Controls */}

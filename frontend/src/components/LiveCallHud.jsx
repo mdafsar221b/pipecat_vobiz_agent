@@ -34,6 +34,7 @@ export default function LiveCallHud({
   lastCompletedCall,
   completedCalls = [],
   onRefreshLogs,
+  transcriptEnabled = false,
 }) {
   const activeTranscriptRef = useRef(null);
   const audioPlayerRef = useRef(null);
@@ -62,7 +63,7 @@ export default function LiveCallHud({
         audioPlayerRef.current
           .play()
           .then(() => setIsPlaying(true))
-          .catch(() => {});
+          .catch(() => { });
       }
     } else {
       setPlayingUuid(callUuid);
@@ -179,6 +180,13 @@ export default function LiveCallHud({
                 <span className="text-[10px] text-muted-foreground mt-0.5">
                   Awaiting carrier answer signal to begin voice stream
                 </span>
+              </div>
+            ) : !transcriptEnabled ? (
+              <div className="text-center py-3 text-muted-foreground text-xs">
+                <p className="font-semibold text-foreground">Voice stream active &mdash; Live transcript is OFF</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Gemini low-cost mode enabled. Turn on <strong className="text-foreground">Transcript</strong> in the top bar to view live conversation turns.
+                </p>
               </div>
             ) : activeCall.turns && activeCall.turns.length > 0 ? (
               activeCall.turns.map((t, idx) => {
@@ -478,8 +486,9 @@ export default function LiveCallHud({
             const diag = inspectingCall.diagnostic || {};
             const diagConf = getDiagnosticConfig(diag.classification);
             const dur = inspectingCall.duration || 0;
-            const turns = inspectingCall.turns || inspectingCall.transcripts || [];
+            const turns = transcriptEnabled ? (inspectingCall.turns || inspectingCall.transcripts || []) : [];
             const hasAudio = dur > 0 || inspectingCall.recording_url;
+            const effectiveDrawerTab = transcriptEnabled ? activeDrawerTab : 'diag';
 
             return (
               <div className="flex flex-col h-full overflow-hidden">
@@ -573,24 +582,26 @@ export default function LiveCallHud({
                 {/* Drawer Tabs Header */}
                 <div className="px-4 pt-2 border-b border-border bg-muted/10 shrink-0">
                   <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setActiveDrawerTab('transcript')}
-                      className={cn(
-                        'px-3 py-1.5 text-xs font-semibold border-b-2 transition-colors cursor-pointer',
-                        activeDrawerTab === 'transcript'
-                          ? 'border-[#008792] text-[#008792]'
-                          : 'border-transparent text-muted-foreground hover:text-foreground'
-                      )}
-                    >
-                      Conversation Transcript ({turns.length})
-                    </button>
+                    {transcriptEnabled && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveDrawerTab('transcript')}
+                        className={cn(
+                          'px-3 py-1.5 text-xs font-semibold border-b-2 transition-colors cursor-pointer',
+                          effectiveDrawerTab === 'transcript'
+                            ? 'border-[#008792] text-[#008792]'
+                            : 'border-transparent text-muted-foreground hover:text-foreground'
+                        )}
+                      >
+                        Conversation Transcript ({turns.length})
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setActiveDrawerTab('diag')}
                       className={cn(
                         'px-3 py-1.5 text-xs font-semibold border-b-2 transition-colors cursor-pointer',
-                        activeDrawerTab === 'diag'
+                        effectiveDrawerTab === 'diag'
                           ? 'border-[#008792] text-[#008792]'
                           : 'border-transparent text-muted-foreground hover:text-foreground'
                       )}
@@ -602,7 +613,7 @@ export default function LiveCallHud({
 
                 {/* Drawer Tab Content */}
                 <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2.5">
-                  {activeDrawerTab === 'transcript' ? (
+                  {effectiveDrawerTab === 'transcript' ? (
                     turns.length > 0 ? (
                       turns.map((t, idx) => {
                         const isAgent = t.role === 'agent';

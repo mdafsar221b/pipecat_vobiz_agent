@@ -116,6 +116,7 @@ export default function BatchesTab({
   templates = [],
   selectedTemplateId = 'production_callback_conversion',
   onNavigateToLive,
+  transcriptEnabled = false,
 }) {
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [batchDetail, setBatchDetail] = useState(null);
@@ -474,7 +475,7 @@ export default function BatchesTab({
         const uuid = (c.call_uuid || '').toLowerCase();
         const reason = (c.reason || '').toLowerCase();
         const diag = (c.diagnostic?.root_cause_summary || '').toLowerCase();
-        const inTurns = (c.turns || []).some((t) => (t.text || '').toLowerCase().includes(q));
+        const inTurns = transcriptEnabled && (c.turns || []).some((t) => (t.text || '').toLowerCase().includes(q));
         return (
           phone.includes(q) ||
           name.includes(q) ||
@@ -487,7 +488,7 @@ export default function BatchesTab({
     }
 
     return list;
-  }, [batchDetail, batchKpiFilter, batchSearchQuery]);
+  }, [batchDetail, batchKpiFilter, batchSearchQuery, transcriptEnabled]);
 
   // Production campaign batches excluding test batches
   const productionBatches = useMemo(() => {
@@ -928,6 +929,7 @@ export default function BatchesTab({
           onToggleSelectAll={toggleSelectAllBatchCalls}
           onCallUpdated={handleCallUpdated}
           containerClassName="max-h-[calc(100vh-220px)]"
+          transcriptEnabled={transcriptEnabled}
         />
 
         {/* Reusable Excel Lead Import Modal */}
@@ -1249,7 +1251,7 @@ export default function BatchesTab({
                           variant="ghost"
                           onClick={() => openBatchDetail(b.batch_id)}
                           className="h-6 w-6 p-0 text-muted-foreground group-hover:text-[#008792] cursor-pointer"
-                          title="View Call Recordings & Transcripts"
+                          title={transcriptEnabled ? 'View Call Recordings & Transcripts' : 'View Call Recordings & Diagnostics'}
                         >
                           <ArrowRight className="w-3.5 h-3.5" />
                         </Button>

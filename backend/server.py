@@ -114,6 +114,8 @@ async def lifespan(app: FastAPI):
     logging.getLogger("uvicorn.access").addFilter(PollingEndpointFilter())
     logger.info("Initializing database and agent components...")
     db.get_collection()
+    t_enabled = db.is_transcript_enabled()
+    logger.info(f"Global transcript mode: {'ENABLED' if t_enabled else 'DISABLED (low-cost Gemini mode)'}")
     logger.info(f"Pipecat Vobiz Server active at {get_public_url() or f'http://127.0.0.1:{PORT}'}")
     yield
     logger.info("Server shutting down cleanly...")
@@ -400,6 +402,25 @@ async def trigger_dial(request: Request):
             return {"ok": True, "status": "call_initiated", "call_uuid": call_uuid, "vobiz_response": result}
         except Exception as exc:
             return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+# Retrieve global transcript setting
+@app.get("/api/settings/transcript")
+async def get_transcript_setting():
+    return {"ok": True, "transcript_enabled": db.is_transcript_enabled()}
+
+# Toggle global transcript setting (also controls Gemini Live audio transcription cost)
+@app.post("/api/settings/transcript")
+async def set_transcript_setting(request: Request):
+    payload = await parse_params(request)
+    raw_val = payload.get("enabled") if "enabled" in payload else payload.get("transcript_enabled")
+    if isinstance(raw_val, str):
+        enabled = raw_val.strip().lower() in ("1", "true", "yes", "on")
+    elif raw_val is None:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Missing 'enabled' boolean"})
+    else:
+        enabled = bool(raw_val)
+    val = db.set_transcript_enabled(enabled)
+    return {"ok": True, "transcript_enabled": val}
 
 # Retrieve dialer and campaign status for UI HUD
 @app.get("/api/campaign/status")

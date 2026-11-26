@@ -63,6 +63,7 @@ export default function CallsTable({
   onToggleSelectAll,
   onCallUpdated,
   containerClassName = 'max-h-[calc(100vh-220px)]',
+  transcriptEnabled = false,
 }) {
   const [inspectingCall, setInspectingCall] = useState(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
@@ -174,13 +175,13 @@ export default function CallsTable({
         audioPlayerRef.current.pause();
         setIsPlaying(false);
       } else {
-        audioPlayerRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+        audioPlayerRef.current.play().then(() => setIsPlaying(true)).catch(() => { });
       }
     } else {
       setPlayingUuid(callUuid);
       audioPlayerRef.current.src = `/api/recording/${encodeURIComponent(callUuid)}`;
       audioPlayerRef.current.currentTime = 0;
-      audioPlayerRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+      audioPlayerRef.current.play().then(() => setIsPlaying(true)).catch(() => { });
     }
   };
 
@@ -235,7 +236,11 @@ export default function CallsTable({
               <TableRow>
                 <TableCell colSpan={colSpanCount} className="text-center py-12 text-muted-foreground">
                   <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
-                  <span className="text-xs font-medium">Fetching call audio telemetry and transcripts...</span>
+                  <span className="text-xs font-medium">
+                    {transcriptEnabled
+                      ? 'Fetching call audio telemetry and transcripts...'
+                      : 'Fetching call audio telemetry...'}
+                  </span>
                 </TableCell>
               </TableRow>
             ) : calls.length === 0 ? (
@@ -476,9 +481,12 @@ export default function CallsTable({
             const custName = overrides.customer_name !== undefined ? overrides.customer_name : (inspectingCall.customer_name || '');
             const callForEdit = { ...inspectingCall, ...overrides, disposition: effectiveDisp, callback_time: cbTime, customer_name: custName };
             const hasRec = Boolean(recUrl || (durSec > 5 && (inB > 0 || outB > 0)));
-            const turns = (inspectingCall.transcripts && inspectingCall.transcripts.length > 0)
-              ? inspectingCall.transcripts
-              : (inspectingCall.turns || []);
+            const turns = transcriptEnabled
+              ? ((inspectingCall.transcripts && inspectingCall.transcripts.length > 0)
+                ? inspectingCall.transcripts
+                : (inspectingCall.turns || []))
+              : [];
+            const effectiveDrawerTab = transcriptEnabled ? activeDrawerTab : 'logs';
             const rawFlow = inspectingCall.callFlow || inspectingCall.events || [];
             const events = rawFlow.map((ev) => ({
               kind: ev.type || ev.event || ev.kind || 'event',
@@ -611,26 +619,31 @@ export default function CallsTable({
 
                 {/* Tab Switcher */}
                 <div className="px-4 pt-3 pb-2 shrink-0">
-                  <div className="grid grid-cols-2 gap-1 p-1 bg-muted/70 border border-border rounded-lg text-xs font-medium">
-                    <button
-                      type="button"
-                      onClick={() => setActiveDrawerTab('transcript')}
-                      className={cn(
-                        "flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md transition-all text-xs font-semibold cursor-pointer",
-                        activeDrawerTab === 'transcript'
-                          ? "bg-background text-foreground shadow-xs border border-border/60"
-                          : "text-muted-foreground hover:text-foreground"
-                      )}
-                    >
-                      <Bot className="w-3.5 h-3.5 text-[#008792]" />
-                      <span>Transcript ({turns.length})</span>
-                    </button>
+                  <div className={cn(
+                    "grid gap-1 p-1 bg-muted/70 border border-border rounded-lg text-xs font-medium",
+                    transcriptEnabled ? "grid-cols-2" : "grid-cols-1"
+                  )}>
+                    {transcriptEnabled && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveDrawerTab('transcript')}
+                        className={cn(
+                          "flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md transition-all text-xs font-semibold cursor-pointer",
+                          effectiveDrawerTab === 'transcript'
+                            ? "bg-background text-foreground shadow-xs border border-border/60"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        <Bot className="w-3.5 h-3.5 text-[#008792]" />
+                        <span>Transcript ({turns.length})</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setActiveDrawerTab('logs')}
                       className={cn(
                         "flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md transition-all text-xs font-semibold cursor-pointer",
-                        activeDrawerTab === 'logs'
+                        effectiveDrawerTab === 'logs'
                           ? "bg-background text-foreground shadow-xs border border-border/60"
                           : "text-muted-foreground hover:text-foreground"
                       )}
@@ -643,7 +656,7 @@ export default function CallsTable({
 
                 {/* Tab Content Body */}
                 <div className="flex-1 overflow-y-auto px-4 py-2 space-y-3">
-                  {activeDrawerTab === 'transcript' ? (
+                  {effectiveDrawerTab === 'transcript' ? (
                     turns.length > 0 ? (
                       <div className="space-y-3 py-1">
                         {turns.map((t, idx) => {

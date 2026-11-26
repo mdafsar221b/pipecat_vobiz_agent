@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Menu, X, Search } from 'lucide-react';
+import { Menu, X, Search, Captions, CaptionsOff } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import { SidebarProvider, SidebarInset, SidebarTrigger } from './components/ui/sidebar';
 import { Separator } from './components/ui/separator';
@@ -56,6 +56,8 @@ export default function App() {
   const [alertMessage, setAlertMessage] = useState('');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [headerSearch, setHeaderSearch] = useState('');
+  const [transcriptEnabled, setTranscriptEnabled] = useState(false);
+  const [isTogglingTranscript, setIsTogglingTranscript] = useState(false);
 
   // Campaign & Live HUD State
   const [campaignData, setCampaignData] = useState({
@@ -143,6 +145,9 @@ export default function App() {
       if (!res.ok) return;
       const data = await res.json();
       setCampaignData(data);
+      if (typeof data.transcript_enabled === 'boolean') {
+        setTranscriptEnabled(data.transcript_enabled);
+      }
 
       if (data.error_message) {
         setAlertMessage(data.error_message);
@@ -255,8 +260,48 @@ export default function App() {
     }
   };
 
+  // Fetch global transcript toggle state
+  const fetchTranscriptSetting = useCallback(async () => {
+    try {
+      const res = await fetch('/api/settings/transcript');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (typeof data.transcript_enabled === 'boolean') {
+        setTranscriptEnabled(data.transcript_enabled);
+      }
+    } catch (err) {
+      console.error('Failed to fetch transcript setting:', err);
+    }
+  }, []);
+
+  // Toggle global transcript state (controls live/stored transcripts and Gemini AI transcription cost)
+  const handleToggleTranscript = async () => {
+    if (isTogglingTranscript) return;
+    const nextState = !transcriptEnabled;
+    setIsTogglingTranscript(true);
+    try {
+      const res = await fetch('/api/settings/transcript', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: nextState }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        setTranscriptEnabled(Boolean(data.transcript_enabled));
+        fetchCampaignStatus();
+      } else {
+        setAlertMessage(data.error || 'Failed to update transcript setting');
+      }
+    } catch (err) {
+      setAlertMessage(`Failed to update transcript setting: ${err.message}`);
+    } finally {
+      setIsTogglingTranscript(false);
+    }
+  };
+
   // Initial Load and Adaptive Polling (1.5s when dialing/in-call, 4s when idle; pauses when tab hidden)
   useEffect(() => {
+    fetchTranscriptSetting();
     fetchCampaignTemplates();
     fetchCrmPendingCalls();
     fetchCampaignStatus();
@@ -273,7 +318,7 @@ export default function App() {
     }, delay);
 
     return () => clearInterval(timer);
-  }, [fetchCampaignTemplates, fetchCampaignStatus, fetchCrmPendingCalls, fetchCompletedLogs, fetchBatches, campaignData?.status, (campaignData?.active_calls || []).length]);
+  }, [fetchTranscriptSetting, fetchCampaignTemplates, fetchCampaignStatus, fetchCrmPendingCalls, fetchCompletedLogs, fetchBatches, campaignData?.status, (campaignData?.active_calls || []).length]);
 
   // Campaign Actions
   const handleStartCampaign = async () => {
@@ -469,6 +514,36 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="xs"
+                variant={transcriptEnabled ? 'default' : 'outline'}
+                disabled={isTogglingTranscript}
+                onClick={handleToggleTranscript}
+                title={
+                  transcriptEnabled
+                    ? 'Transcripts are ON everywhere. Click to turn OFF and reduce Gemini AI cost.'
+                    : 'Transcripts are OFF everywhere (Low Gemini AI Cost). Click to turn ON.'
+                }
+                className={
+                  transcriptEnabled
+                    ? 'h-8 px-2.5 gap-1.5 text-xs font-semibold bg-[#008792] hover:bg-[#007680] text-white cursor-pointer shadow-xs'
+                    : 'h-8 px-2.5 gap-1.5 text-xs font-semibold border-border bg-muted/40 text-muted-foreground hover:text-foreground hover:border-[#008792] cursor-pointer'
+                }
+              >
+                {transcriptEnabled ? (
+                  <>
+                    <Captions className="w-3.5 h-3.5" />
+                    <span>Transcript: ON</span>
+                  </>
+                ) : (
+                  <>
+                    <CaptionsOff className="w-3.5 h-3.5" />
+                    <span>Transcript: OFF</span>
+                  </>
+                )}
+              </Button>
+
               <div className="relative w-60 sm:w-72">
                 <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <Input
@@ -547,6 +622,7 @@ export default function App() {
                   onRefreshBatches={fetchBatches}
                   completedCalls={completedCalls}
                   onRefreshLogs={fetchCompletedLogs}
+                  transcriptEnabled={transcriptEnabled}
                 />
               </div>
             )}
@@ -590,6 +666,7 @@ export default function App() {
                     templates={templates}
                     selectedTemplateId={selectedTemplateId}
                     onNavigateToLive={() => setActiveNav('live')}
+                    transcriptEnabled={transcriptEnabled}
                   />
                 </ErrorBoundary>
               </div>
@@ -620,6 +697,7 @@ export default function App() {
                     onRefreshLogs={fetchCompletedLogs}
                     onQueueLeads={handleQueueLeads}
                     searchText={headerSearch}
+                    transcriptEnabled={transcriptEnabled}
                   />
                 </ErrorBoundary>
               </div>

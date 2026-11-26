@@ -472,12 +472,13 @@ class OutboundDialer:
         if self.active_call and (not call_uuid or self.active_call.get("call_uuid") == call_uuid):
             duration = round(time.time() - self.active_call.get("started_at", time.time()), 1)
             doc = db.get_call(call_uuid)
+            t_enabled = db.is_transcript_enabled()
             self.last_call = {
                 **self.active_call,
                 "duration": doc.get("duration", duration) if doc else duration,
                 "disposition": doc.get("disposition", "completed") if doc else "completed",
                 "ended_at": time.time(),
-                "turns": doc.get("turns", []) if doc else [],
+                "turns": (doc.get("turns", []) if doc else []) if t_enabled else [],
                 "diagnostic": doc.get("diagnostic", {}) if doc else {},
             }
             self.active_call = None
@@ -490,12 +491,13 @@ class OutboundDialer:
     def get_status_payload(self) -> Dict[str, Any]:
         kpi = self.get_kpi_counts()
         next_lead = next((i for i in self.queue if i["status"] == "pending"), None)
+        t_enabled = db.is_transcript_enabled()
 
         active_list: List[Dict[str, Any]] = []
         if self.active_call:
             uuid = self.active_call.get("call_uuid", "")
             doc = db.get_call(uuid) if uuid else None
-            turns = doc.get("turns", []) if doc else []
+            turns = (doc.get("turns", []) if doc else []) if t_enabled else []
             elapsed = int(time.time() - self.active_call.get("started_at", time.time()))
 
             ac_obj = {
@@ -514,7 +516,7 @@ class OutboundDialer:
         last_rec = recent[0] if recent else None
         last_completed = None
         if self.last_call:
-            last_completed = self.last_call
+            last_completed = {**self.last_call, "turns": self.last_call.get("turns", []) if t_enabled else []}
         elif last_rec:
             last_completed = {
                 "call_uuid": last_rec.get("call_uuid", ""),
@@ -523,7 +525,7 @@ class OutboundDialer:
                 "disposition": last_rec.get("disposition", "completed"),
                 "duration": last_rec.get("duration", 0),
                 "ended_at": last_rec.get("ended_at_epoch") or time.time(),
-                "turns": last_rec.get("turns", []),
+                "turns": (last_rec.get("turns", []) if t_enabled else []),
                 "diagnostic": last_rec.get("diagnostic", {}),
             }
 
@@ -533,6 +535,7 @@ class OutboundDialer:
             "is_paused": self.status == "paused",
             "running": self.status == "running",
             "paused": self.status == "paused",
+            "transcript_enabled": t_enabled,
             "stats": kpi,
             "kpis": kpi,
             "counts": kpi,

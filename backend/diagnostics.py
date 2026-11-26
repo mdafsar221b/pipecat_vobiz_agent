@@ -39,6 +39,7 @@ class CallTracer:
         self.customer_name: Optional[str] = None
         self.callback_time: Optional[str] = None
         self.reason: Optional[str] = None
+        self.caller_speech_detected: bool = False
         self.t_answer: Optional[float] = None
         self.t_media_ready: Optional[float] = None
         self.t_gemini_ready: Optional[float] = None

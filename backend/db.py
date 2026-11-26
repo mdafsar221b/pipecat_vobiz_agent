@@ -39,12 +39,15 @@ MONGO_DB_NAME = _extract_db_name(MONGO_URI, os.getenv("MONGO_DB_NAME"))
 MONGO_COLLECTION_NAME = os.getenv("MONGO_COLLECTION_NAME", "vobiz_ai_calls")
 MONGO_BATCHES_COLLECTION_NAME = os.getenv("MONGO_BATCHES_COLLECTION_NAME", "campaign_batches")
 MONGO_TEMPLATES_COLLECTION_NAME = os.getenv("MONGO_TEMPLATES_COLLECTION_NAME", "campaign_templates")
+MONGO_SETTINGS_COLLECTION_NAME = os.getenv("MONGO_SETTINGS_COLLECTION_NAME", "app_settings")
 
 _client: Optional[MongoClient] = None
 _db: Optional[Database] = None
 _collection: Optional[Collection] = None
 _batches_col: Optional[Collection] = None
 _templates_col: Optional[Collection] = None
+_settings_col: Optional[Collection] = None
+_transcript_enabled_cache: Optional[bool] = None
 
 # Initialize MongoDB client and ensure collection indexes
 def get_collection() -> Optional[Collection]:
@@ -97,6 +100,53 @@ def get_templates_collection() -> Optional[Collection]:
         _templates_col.create_index([("template_id", ASCENDING)], unique=True)
         return _templates_col
     return None
+
+# Initialize global app settings collection
+def get_settings_collection() -> Optional[Collection]:
+    global _db, _settings_col
+    if _settings_col is not None:
+        return _settings_col
+    get_collection()
+    if _db is not None:
+        _settings_col = _db[MONGO_SETTINGS_COLLECTION_NAME]
+        return _settings_col
+    return None
+
+# Check whether live & stored transcripts are globally enabled (defaults to False for low Gemini AI cost)
+def is_transcript_enabled() -> bool:
+    global _transcript_enabled_cache
+    if _transcript_enabled_cache is not None:
+        return _transcript_enabled_cache
+    try:
+        scol = get_settings_collection()
+        if scol is not None:
+            doc = scol.find_one({"_id": "global_settings"})
+            if doc is not None and "transcript_enabled" in doc:
+                _transcript_enabled_cache = bool(doc["transcript_enabled"])
+                return _transcript_enabled_cache
+    except Exception as exc:
+        logger.warning(f"Failed to read transcript_enabled setting from DB: {exc}")
+    env_default = os.getenv("ENABLE_TRANSCRIPT", "false").strip().lower() in ("1", "true", "yes", "on")
+    _transcript_enabled_cache = env_default
+    return _transcript_enabled_cache
+
+# Persist global transcript enabled/disabled flag
+def set_transcript_enabled(enabled: bool) -> bool:
+    global _transcript_enabled_cache
+    val = bool(enabled)
+    _transcript_enabled_cache = val
+    try:
+        scol = get_settings_collection()
+        if scol is not None:
+            scol.update_one(
+                {"_id": "global_settings"},
+                {"$set": {"transcript_enabled": val, "updated_at": now_iso()}},
+                upsert=True,
+            )
+    except Exception as exc:
+        logger.error(f"Failed to persist transcript_enabled setting: {exc}")
+    logger.info(f"Global transcript setting updated: {'ENABLED' if val else 'DISABLED (low-cost mode)'}")
+    return val
 
 # Seed default campaign templates if collection is empty
 def init_default_templates() -> None:
@@ -437,8 +487,10 @@ def update_call(call_uuid: str, updates: Dict[str, Any]) -> None:
         except Exception as exc:
             logger.error(f"Failed to update call {call_uuid}: {exc}")
 
-# Append a spoken turn to the call transcript
+# Append a spoken turn to the call transcript (no-op when transcripts are disabled)
 def append_transcript(call_uuid: str, role: str, text: str) -> None:
+    if not is_transcript_enabled():
+        return
     col = get_collection()
     if not text or not text.strip():
         return
@@ -542,11 +594,29 @@ def resolve_end_of_call_disposition(
     if hangup_cause in ("NO_ANSWER", "TIMEOUT", "CALL_REJECTED", "ORIGINATOR_CANCEL", "REJECTED") or (audio_out == 0 and audio_in == 0 and len(transcripts) == 0):
         return {"disposition": "no_answer", "reason": "Customer did not answer / carrier network issue"}
 
-    # 2. No caller audio received (agent spoke greeting, then line dropped or remained completely silent)
+    name = tracer.customer_name or (doc.get("customer_name") if doc else None) or (doc.get("metadata", {}).get("customer_name") if doc else None)
+    cb = tracer.callback_time or (doc.get("callback_time") if doc else None)
+
+    # 2. No caller transcript turns (either silent caller, or transcript collection was disabled)
     if len(caller_turns) == 0:
-        if audio_out > 0 and (duration is None or duration < 35):
-            return {"disposition": "dropped", "reason": "Connection dropped after greeting before customer could speak (retryable)"}
-        return {"disposition": "not_talking", "reason": "Customer remained silent throughout call"}
+        if tracer.disposition in ("interested", "not_interested", "wrong_number"):
+            return {
+                "disposition": tracer.disposition,
+                "customer_name": name,
+                "callback_time": cb,
+                "reason": tracer.reason or f"Call concluded with disposition: {tracer.disposition}",
+            }
+        caller_spoke = bool(getattr(tracer, "caller_speech_detected", False) or getattr(tracer, "turns_count", 0) > 1)
+        if not caller_spoke:
+            if audio_out > 0 and (duration is None or duration < 35):
+                return {"disposition": "dropped", "reason": "Connection dropped after greeting before customer could speak (retryable)"}
+            return {"disposition": "not_talking", "reason": "Customer remained silent throughout call"}
+        return {
+            "disposition": tracer.disposition or fallback_disposition or "dropped",
+            "customer_name": name,
+            "callback_time": cb,
+            "reason": tracer.reason or "Conversation disconnected before qualification outcome reached",
+        }
 
     # 3. Caller spoke - evaluate conversational evidence
     full_caller = " ".join(t.get("text", "") for t in caller_turns).lower()
@@ -559,9 +629,6 @@ def resolve_end_of_call_disposition(
     ]
     if tracer.disposition == "wrong_number" or any(re.search(p, full_caller) for p in wrong_num_patterns):
         return {"disposition": "wrong_number", "reason": tracer.reason or "Caller indicated wrong number"}
-
-    name = tracer.customer_name or (doc.get("customer_name") if doc else None) or (doc.get("metadata", {}).get("customer_name") if doc else None)
-    cb = tracer.callback_time or (doc.get("callback_time") if doc else None)
 
     # 4. Explicit Rejection by Caller (Word Boundary Checked)
     decline_regexes = [
@@ -845,7 +912,11 @@ def get_call(call_uuid: str) -> Optional[Dict[str, Any]]:
         try:
             doc = col.find_one({"call_uuid": call_uuid}, {"_id": 0})
             if doc:
-                doc["turns"] = doc.get("transcripts", [])
+                if is_transcript_enabled():
+                    doc["turns"] = doc.get("transcripts", [])
+                else:
+                    doc["transcripts"] = []
+                    doc["turns"] = []
                 doc["duration"] = doc.get("duration_seconds", 0) or 0
                 doc["started"] = doc.get("created_at", "")
                 doc["ended"] = doc.get("ended_at", "")
