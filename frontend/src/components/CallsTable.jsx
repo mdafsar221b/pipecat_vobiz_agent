@@ -175,13 +175,13 @@ export default function CallsTable({
         audioPlayerRef.current.pause();
         setIsPlaying(false);
       } else {
-        audioPlayerRef.current.play().then(() => setIsPlaying(true)).catch(() => { });
+        audioPlayerRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
       }
     } else {
       setPlayingUuid(callUuid);
       audioPlayerRef.current.src = `/api/recording/${encodeURIComponent(callUuid)}`;
       audioPlayerRef.current.currentTime = 0;
-      audioPlayerRef.current.play().then(() => setIsPlaying(true)).catch(() => { });
+      audioPlayerRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
     }
   };
 

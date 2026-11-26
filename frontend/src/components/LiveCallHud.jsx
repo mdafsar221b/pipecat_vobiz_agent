@@ -63,7 +63,7 @@ export default function LiveCallHud({
         audioPlayerRef.current
           .play()
           .then(() => setIsPlaying(true))
-          .catch(() => { });
+          .catch(() => {});
       }
     } else {
       setPlayingUuid(callUuid);
