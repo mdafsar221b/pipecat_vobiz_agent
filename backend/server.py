@@ -59,7 +59,7 @@ if "sentencex" not in sys.modules:
 import db
 import diagnostics
 import vobiz_api
-from agent import run_vobiz_agent, transcribe_audio_bytes_with_gemini
+from agent import run_vobiz_agent, transcribe_audio_bytes_with_gemini, translate_turns_to_english_with_gemini
 from dialer import dialer, manager as dialer_manager
 
 # Resolve dialer instance for the requesting operator
@@ -653,10 +653,11 @@ async def get_recording(call_uuid: str):
         headers={"Accept-Ranges": "bytes"},
     )
 
-# Transcribe a specific call's recorded audio on-demand using Gemini
+# Transcribe a specific call's recorded audio (or translate to English) on-demand using Gemini
 @app.post("/api/calls/{call_uuid}/transcribe")
 async def transcribe_call_audio(call_uuid: str, request: Request):
     force = False
+    language = "original"
     try:
         payload = await parse_params(request)
         raw_force = payload.get("force")
@@ -664,17 +665,77 @@ async def transcribe_call_audio(call_uuid: str, request: Request):
             force = raw_force.strip().lower() in ("1", "true", "yes")
         else:
             force = bool(raw_force)
+        raw_lang = str(payload.get("language") or "original").strip().lower()
+        if raw_lang in ("en", "english"):
+            language = "english"
     except Exception:
         pass
 
     col = db.get_collection()
-    existing_doc = col.find_one({"call_uuid": call_uuid}, {"_id": 0, "manual_transcripts": 1}) if col is not None else None
-    cached_turns = (existing_doc or {}).get("manual_transcripts") or []
-    if cached_turns and not force:
+    existing_doc = (
+        col.find_one(
+            {"call_uuid": call_uuid},
+            {"_id": 0, "manual_transcripts": 1, "manual_transcripts_en": 1, "transcripts": 1},
+        )
+        if col is not None
+        else None
+    )
+    cached_orig = (existing_doc or {}).get("manual_transcripts") or []
+    cached_en = (existing_doc or {}).get("manual_transcripts_en") or []
+    live_turns = (existing_doc or {}).get("transcripts") or []
+
+    if language == "english":
+        if cached_en and not force:
+            return {
+                "ok": True,
+                "call_uuid": call_uuid,
+                "language": "english",
+                "turns": cached_en,
+                "cached": True,
+                "has_english_transcript": True,
+            }
+
+        source_turns = cached_orig or (live_turns if db.is_transcript_enabled() else [])
+        if source_turns and not force:
+            try:
+                en_turns = await translate_turns_to_english_with_gemini(source_turns)
+                db.save_manual_transcript(call_uuid, en_turns, language="english")
+                return {
+                    "ok": True,
+                    "call_uuid": call_uuid,
+                    "language": "english",
+                    "turns": en_turns,
+                    "cached": False,
+                    "has_english_transcript": True,
+                }
+            except Exception as exc:
+                logger.error(f"On-demand English translation failed for {call_uuid}: {exc}")
+                return JSONResponse(status_code=500, content={"ok": False, "error": f"English translation failed: {exc}"})
+
+        audio_bytes, media_type, err_msg, status_code = await fetch_call_recording_bytes(call_uuid)
+        if audio_bytes is None:
+            return JSONResponse(status_code=status_code, content={"ok": False, "error": err_msg or "No recording available for this call"})
+        try:
+            en_turns = await transcribe_audio_bytes_with_gemini(audio_bytes, media_type or "audio/mpeg", target_language="english")
+            db.save_manual_transcript(call_uuid, en_turns, language="english")
+            return {
+                "ok": True,
+                "call_uuid": call_uuid,
+                "language": "english",
+                "turns": en_turns,
+                "cached": False,
+                "has_english_transcript": True,
+            }
+        except Exception as exc:
+            logger.error(f"On-demand English transcription failed for {call_uuid}: {exc}")
+            return JSONResponse(status_code=500, content={"ok": False, "error": f"Transcription failed: {exc}"})
+
+    if cached_orig and not force:
         return {
             "ok": True,
             "call_uuid": call_uuid,
-            "turns": cached_turns,
+            "language": "original",
+            "turns": cached_orig,
             "cached": True,
             "has_manual_transcript": True,
         }
@@ -684,11 +745,12 @@ async def transcribe_call_audio(call_uuid: str, request: Request):
         return JSONResponse(status_code=status_code, content={"ok": False, "error": err_msg or "No recording available for this call"})
 
     try:
-        turns = await transcribe_audio_bytes_with_gemini(audio_bytes, media_type or "audio/mpeg")
-        db.save_manual_transcript(call_uuid, turns)
+        turns = await transcribe_audio_bytes_with_gemini(audio_bytes, media_type or "audio/mpeg", target_language="original")
+        db.save_manual_transcript(call_uuid, turns, language="original", clear_english=force)
         return {
             "ok": True,
             "call_uuid": call_uuid,
+            "language": "original",
             "turns": turns,
             "cached": False,
             "has_manual_transcript": True,

@@ -181,44 +181,36 @@ def detect_audio_mime_type(audio_bytes: bytes, content_type: str = "") -> str:
         return clean_ct
     return "audio/mpeg"
 
-# Transcribe a single call's recorded audio bytes on demand using Gemini multimodal generate_content
-async def transcribe_audio_bytes_with_gemini(audio_bytes: bytes, content_type: str = "") -> List[Dict[str, Any]]:
-    if not audio_bytes:
-        return []
+# Shared Gemini JSON generation helper with model fallback, 503 retry, and API key rotation
+async def _call_gemini_json_with_fallback(contents: List[Any], op_label: str = "transcription") -> Any:
     if not GEMINI_API_KEYS:
         raise ValueError("No Gemini API keys configured in environment.")
 
-    mime_type = detect_audio_mime_type(audio_bytes, content_type)
     primary_model = os.getenv("GEMINI_TRANSCRIBE_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
     candidate_models = [primary_model]
-    for fallback_model in ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash"):
+    for fallback_model in (
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+    ):
         if fallback_model not in candidate_models:
             candidate_models.append(fallback_model)
 
-    prompt = (
-        "Listen carefully to this phone call recording between an AI voice agent ('Ananya' from Swargaseema) "
-        "and a customer/caller.\n"
-        "Transcribe the complete conversation chronologically in the exact spoken language(s) "
-        "(Telugu, Hindi, English, or mixed as spoken).\n"
-        "Label each turn's role as 'agent' (the female AI voice agent speaking for Swargaseema) or 'caller' (the customer).\n"
-        "Return ONLY a valid JSON array of objects with keys 'role' ('agent' or 'caller') and 'text' (spoken words). "
-        "If there is no intelligible speech (only silence or ringing), return []."
-    )
-
     last_error: Optional[Exception] = None
-    for model_name in candidate_models:
+    for idx, model_name in enumerate(candidate_models):
+        is_last_model = idx == len(candidate_models) - 1
         max_attempts = max(1, len(GEMINI_API_KEYS))
-        for attempt in range(max_attempts):
+        transient_retries = 0
+        attempt = 0
+        while attempt < max_attempts:
             api_key = get_gemini_api_key()
             try:
                 def _run_sync() -> str:
                     client = Client(api_key=api_key)
                     resp = client.models.generate_content(
                         model=model_name,
-                        contents=[
-                            types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
-                            prompt,
-                        ],
+                        contents=contents,
                         config=types.GenerateContentConfig(
                             temperature=0.1,
                             response_mime_type="application/json",
@@ -232,24 +224,7 @@ async def transcribe_audio_bytes_with_gemini(audio_bytes: bytes, content_type: s
                     cleaned = cleaned.strip("`")
                     if cleaned.lower().startswith("json"):
                         cleaned = cleaned[4:].strip()
-
-                parsed = json.loads(cleaned)
-                if isinstance(parsed, dict):
-                    parsed = parsed.get("turns") or parsed.get("transcripts") or []
-                if not isinstance(parsed, list):
-                    return []
-
-                turns: List[Dict[str, Any]] = []
-                now_ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
-                for item in parsed:
-                    if not isinstance(item, dict):
-                        continue
-                    role_raw = str(item.get("role", "")).strip().lower()
-                    role = "agent" if role_raw in ("agent", "ai", "assistant", "bot", "ananya") else "caller"
-                    txt = str(item.get("text") or item.get("content") or "").strip()
-                    if txt:
-                        turns.append({"role": role, "text": txt, "timestamp": now_ts})
-                return turns
+                return json.loads(cleaned)
             except Exception as exc:
                 last_error = exc
                 err_str = str(exc).lower()
@@ -257,16 +232,109 @@ async def transcribe_audio_bytes_with_gemini(audio_bytes: bytes, content_type: s
                     "429", "resource_exhausted", "quota", "403", "permission_denied", "unauthenticated"
                 ])
                 if is_quota_or_auth and attempt < max_attempts - 1:
-                    rotate_gemini_api_key(f"On-demand transcription quota/auth error: {exc}")
+                    rotate_gemini_api_key(f"On-demand {op_label} quota/auth error: {exc}")
+                    attempt += 1
                     continue
+                is_transient = any(m in err_str for m in [
+                    "503", "unavailable", "high demand", "overloaded", "500", "internal", "timeout", "try again"
+                ])
+                if is_transient:
+                    if is_last_model and transient_retries < 1:
+                        transient_retries += 1
+                        logger.warning(f"Gemini {op_label} model {model_name} temporarily unavailable ({exc}); retrying in 1.5s")
+                        await asyncio.sleep(1.5)
+                        continue
+                    logger.warning(f"Gemini {op_label} model {model_name} overloaded/unavailable ({exc}); trying fallback model")
+                    break
                 is_model_error = any(m in err_str for m in ["404", "not_found", "not found", "unsupported"])
                 if is_model_error:
-                    logger.warning(f"Gemini transcribe model {model_name} unavailable ({exc}); trying fallback")
+                    logger.warning(f"Gemini {op_label} model {model_name} unavailable ({exc}); trying fallback model")
                     break
                 raise
     if last_error:
         raise last_error
     return []
+
+def _normalize_transcript_turns(parsed: Any) -> List[Dict[str, Any]]:
+    if isinstance(parsed, dict):
+        parsed = parsed.get("turns") or parsed.get("transcripts") or []
+    if not isinstance(parsed, list):
+        return []
+    turns: List[Dict[str, Any]] = []
+    now_ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        role_raw = str(item.get("role", "")).strip().lower()
+        role = "agent" if role_raw in ("agent", "ai", "assistant", "bot", "ananya") else "caller"
+        txt = str(item.get("text") or item.get("content") or "").strip()
+        if txt:
+            turns.append({"role": role, "text": txt, "timestamp": item.get("timestamp") or now_ts})
+    return turns
+
+# Transcribe a single call's recorded audio bytes on demand using Gemini multimodal generate_content
+async def transcribe_audio_bytes_with_gemini(
+    audio_bytes: bytes,
+    content_type: str = "",
+    target_language: str = "original",
+) -> List[Dict[str, Any]]:
+    if not audio_bytes:
+        return []
+
+    mime_type = detect_audio_mime_type(audio_bytes, content_type)
+    if str(target_language).strip().lower() == "english":
+        lang_instruction = (
+            "Transcribe the complete conversation chronologically and translate every spoken turn into clear, natural English. "
+            "All output text must be in English."
+        )
+    else:
+        lang_instruction = (
+            "Transcribe the complete conversation chronologically in the exact spoken language(s) "
+            "(Telugu, Hindi, English, or mixed as spoken)."
+        )
+
+    prompt = (
+        "Listen carefully to this phone call recording between an AI voice agent ('Ananya' from Swargaseema) "
+        "and a customer/caller.\n"
+        f"{lang_instruction}\n"
+        "Label each turn's role as 'agent' (the female AI voice agent speaking for Swargaseema) or 'caller' (the customer).\n"
+        "Return ONLY a valid JSON array of objects with keys 'role' ('agent' or 'caller') and 'text' (spoken words). "
+        "If there is no intelligible speech (only silence or ringing), return []."
+    )
+    parsed = await _call_gemini_json_with_fallback(
+        [types.Part.from_bytes(data=audio_bytes, mime_type=mime_type), prompt],
+        op_label="transcription",
+    )
+    return _normalize_transcript_turns(parsed)
+
+# Translate existing conversation transcript turns into clear English using Gemini text-only call
+async def translate_turns_to_english_with_gemini(turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not turns:
+        return []
+    compact_turns = [
+        {
+            "role": "agent" if str(t.get("role", "")).lower() == "agent" else "caller",
+            "text": str(t.get("text") or t.get("content") or "").strip(),
+        }
+        for t in turns
+        if str(t.get("text") or t.get("content") or "").strip()
+    ]
+    if not compact_turns:
+        return []
+
+    prompt = (
+        "Translate this phone call transcript between an AI voice agent ('agent') and a customer ('caller') "
+        "into clear, natural English.\n"
+        "Preserve the exact turn order and 'role' values ('agent' or 'caller').\n"
+        "Return ONLY a valid JSON array of objects with keys 'role' and 'text' (in English).\n\n"
+        f"Input transcript JSON:\n{json.dumps(compact_turns, ensure_ascii=False)}"
+    )
+    parsed = await _call_gemini_json_with_fallback([prompt], op_label="translation")
+    translated = _normalize_transcript_turns(parsed)
+    for idx, item in enumerate(translated):
+        if idx < len(turns) and turns[idx].get("timestamp"):
+            item["timestamp"] = turns[idx]["timestamp"]
+    return translated
 
 # Build and execute the real-time Pipecat agent for an incoming Vobiz stream
 async def run_vobiz_agent(

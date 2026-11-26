@@ -506,22 +506,30 @@ def append_transcript(call_uuid: str, role: str, text: str) -> None:
             logger.error(f"Failed to append transcript for {call_uuid}: {exc}")
 
 # Persist on-demand audio-to-transcript turns for a specific call
-def save_manual_transcript(call_uuid: str, turns: List[Dict[str, Any]]) -> None:
+def save_manual_transcript(call_uuid: str, turns: List[Dict[str, Any]], language: str = "original", clear_english: bool = False) -> None:
     col = get_collection()
     if col is not None:
         try:
-            col.update_one(
-                {"call_uuid": call_uuid},
-                {
-                    "$set": {
-                        "manual_transcripts": turns,
-                        "has_manual_transcript": True,
-                        "manual_transcribed_at": now_iso(),
-                        "updated_at": now_iso(),
-                    }
-                },
-                upsert=True,
-            )
+            is_en = str(language).strip().lower() == "english"
+            if is_en:
+                set_fields: Dict[str, Any] = {
+                    "manual_transcripts_en": turns,
+                    "has_english_transcript": True,
+                    "manual_transcribed_en_at": now_iso(),
+                    "updated_at": now_iso(),
+                }
+                col.update_one({"call_uuid": call_uuid}, {"$set": set_fields}, upsert=True)
+            else:
+                set_fields = {
+                    "manual_transcripts": turns,
+                    "has_manual_transcript": True,
+                    "manual_transcribed_at": now_iso(),
+                    "updated_at": now_iso(),
+                }
+                update_op: Dict[str, Any] = {"$set": set_fields}
+                if clear_english:
+                    update_op["$unset"] = {"manual_transcripts_en": "", "has_english_transcript": ""}
+                col.update_one({"call_uuid": call_uuid}, update_op, upsert=True)
         except Exception as exc:
             logger.error(f"Failed to save manual transcript for {call_uuid}: {exc}")
 
@@ -933,14 +941,18 @@ def get_call(call_uuid: str) -> Optional[Dict[str, Any]]:
             doc = col.find_one({"call_uuid": call_uuid}, {"_id": 0})
             if doc:
                 manual_turns = doc.get("manual_transcripts") or []
+                english_turns = doc.get("manual_transcripts_en") or []
                 if is_transcript_enabled():
                     doc["turns"] = doc.get("transcripts") or manual_turns
-                elif manual_turns:
+                    doc["english_turns"] = english_turns
+                elif manual_turns or english_turns:
                     doc["turns"] = manual_turns
+                    doc["english_turns"] = english_turns
                     doc["transcripts"] = []
                 else:
                     doc["transcripts"] = []
                     doc["turns"] = []
+                    doc["english_turns"] = []
                 doc["duration"] = doc.get("duration_seconds", 0) or 0
                 doc["started"] = doc.get("created_at", "")
                 doc["ended"] = doc.get("ended_at", "")
@@ -1063,6 +1075,7 @@ def get_paginated_calls(
             "_id": 0,
             "transcripts": 0,
             "manual_transcripts": 0,
+            "manual_transcripts_en": 0,
             "callFlow": 0,
             "events": 0,
             "metadata": 0,
@@ -1259,6 +1272,7 @@ def get_batch_detail(batch_id: str) -> Dict[str, Any]:
                 "_id": 0,
                 "transcripts": 0,
                 "manual_transcripts": 0,
+                "manual_transcripts_en": 0,
                 "callFlow": 0,
                 "events": 0,
                 "metadata": 0,
