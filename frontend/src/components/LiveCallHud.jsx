@@ -43,6 +43,7 @@ export default function LiveCallHud({
   const [isPlaying, setIsPlaying] = useState(false);
   const [inspectingCall, setInspectingCall] = useState(null);
   const [activeDrawerTab, setActiveDrawerTab] = useState('transcript');
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [transcribingUuid, setTranscribingUuid] = useState(null);
   const [transcribeError, setTranscribeError] = useState('');
   const [transcriptOverrides, setTranscriptOverrides] = useState({});
@@ -129,36 +130,73 @@ export default function LiveCallHud({
   };
 
   const handleOpenInspect = async (callObj, { autoTranscribe = false } = {}) => {
+    const uuid = callObj?.call_uuid || callObj?.callId || callObj?.uuid;
+    const cachedOrig = uuid ? transcriptOverrides[uuid] : undefined;
+    const cachedEn = uuid ? englishOverrides[uuid] : undefined;
+
     setInspectingCall(callObj);
-    setTranscriptLang('original');
     setTranscribeError('');
     if (autoTranscribe) {
       setActiveDrawerTab('transcript');
     }
-    const uuid = callObj?.call_uuid || callObj?.callId || callObj?.uuid;
+
     let resolvedCall = callObj;
-    if (uuid && (!callObj.turns?.length && !callObj.transcripts?.length && !callObj.manual_transcripts?.length)) {
+    const hasLocalOrig = Boolean(
+      (cachedOrig && cachedOrig.length > 0) ||
+      callObj?.manual_transcripts?.length ||
+      (transcriptEnabled && (callObj?.transcripts?.length || callObj?.turns?.length))
+    );
+    const hasLocalEn = Boolean(
+      (cachedEn && cachedEn.length > 0) ||
+      callObj?.manual_transcripts_en?.length ||
+      callObj?.english_turns?.length
+    );
+
+    if (uuid && !hasLocalOrig && !hasLocalEn) {
+      setIsLoadingDetail(true);
       try {
         const res = await fetch(`/api/calls/${encodeURIComponent(uuid)}`);
         if (res.ok) {
           const data = await res.json();
           if (data.ok && data.call) {
             resolvedCall = { ...callObj, ...data.call };
+            const fetchedOrig = data.call.manual_transcripts || data.call.turns || [];
+            const fetchedEn = data.call.manual_transcripts_en || data.call.english_turns || [];
+            if (fetchedOrig.length > 0) {
+              setTranscriptOverrides((prev) => ({ ...prev, [uuid]: fetchedOrig }));
+            }
+            if (fetchedEn.length > 0) {
+              setEnglishOverrides((prev) => ({ ...prev, [uuid]: fetchedEn }));
+            }
             setInspectingCall((prev) => (prev && (prev.call_uuid === uuid || prev.callId === uuid) ? { ...prev, ...data.call } : prev));
           }
         }
       } catch (err) {
         console.error('Failed to load call detail:', err);
+      } finally {
+        setIsLoadingDetail(false);
       }
     }
-    if (autoTranscribe && uuid) {
-      const existing =
-        transcriptOverrides[uuid] ||
-        resolvedCall.manual_transcripts ||
-        (transcriptEnabled ? (resolvedCall.transcripts || resolvedCall.turns) : (resolvedCall.has_manual_transcript ? resolvedCall.turns : []));
-      if (!existing || existing.length === 0) {
-        handleTranscribeCall(resolvedCall, false);
-      }
+
+    const finalOrig =
+      (uuid && transcriptOverrides[uuid]) ||
+      resolvedCall?.manual_transcripts ||
+      (transcriptEnabled ? (resolvedCall?.transcripts || resolvedCall?.turns) : (resolvedCall?.has_manual_transcript ? resolvedCall?.turns : [])) ||
+      [];
+    const finalEn =
+      (uuid && englishOverrides[uuid]) ||
+      resolvedCall?.english_turns ||
+      resolvedCall?.manual_transcripts_en ||
+      [];
+
+    if (finalOrig.length === 0 && finalEn.length > 0) {
+      setTranscriptLang('english');
+    } else {
+      setTranscriptLang('original');
+    }
+
+    if (autoTranscribe && uuid && finalOrig.length === 0 && finalEn.length === 0) {
+      handleTranscribeCall(resolvedCall, false, 'original');
     }
   };
 
@@ -815,7 +853,12 @@ export default function LiveCallHud({
                           </div>
                         </div>
                       )}
-                      {isTranscribingThis ? (
+                      {isLoadingDetail ? (
+                        <div className="text-center py-10 text-muted-foreground">
+                          <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
+                          <p className="text-xs font-medium text-foreground">Loading saved call details...</p>
+                        </div>
+                      ) : isTranscribingThis ? (
                         <div className="text-center py-10 text-muted-foreground">
                           <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
                           <p className="text-xs font-semibold text-foreground">

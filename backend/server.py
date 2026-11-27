@@ -671,14 +671,9 @@ async def transcribe_call_audio(call_uuid: str, request: Request):
     except Exception:
         pass
 
-    col = db.get_collection()
-    existing_doc = (
-        col.find_one(
-            {"call_uuid": call_uuid},
-            {"_id": 0, "manual_transcripts": 1, "manual_transcripts_en": 1, "transcripts": 1},
-        )
-        if col is not None
-        else None
+    existing_doc = db.find_call_doc(
+        call_uuid,
+        {"_id": 0, "manual_transcripts": 1, "manual_transcripts_en": 1, "transcripts": 1},
     )
     cached_orig = (existing_doc or {}).get("manual_transcripts") or []
     cached_en = (existing_doc or {}).get("manual_transcripts_en") or []

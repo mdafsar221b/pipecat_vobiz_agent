@@ -505,11 +505,31 @@ def append_transcript(call_uuid: str, role: str, text: str) -> None:
         except Exception as exc:
             logger.error(f"Failed to append transcript for {call_uuid}: {exc}")
 
+# Match a call document regardless of which identifier field was stored
+def _call_uuid_filter(call_uuid: str) -> Dict[str, Any]:
+    return {"$or": [{"call_uuid": call_uuid}, {"callId": call_uuid}, {"uuid": call_uuid}]}
+
+# Fetch raw call document fields by any call identifier
+def find_call_doc(call_uuid: str, projection: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    col = get_collection()
+    if col is None:
+        return None
+    try:
+        doc = col.find_one({"call_uuid": call_uuid}, projection)
+        if doc is None:
+            doc = col.find_one(_call_uuid_filter(call_uuid), projection)
+        return doc
+    except Exception as exc:
+        logger.error(f"Failed to find call doc {call_uuid}: {exc}")
+        return None
+
 # Persist on-demand audio-to-transcript turns for a specific call
 def save_manual_transcript(call_uuid: str, turns: List[Dict[str, Any]], language: str = "original", clear_english: bool = False) -> None:
     col = get_collection()
     if col is not None:
         try:
+            existing = find_call_doc(call_uuid, {"_id": 1})
+            match_query = {"_id": existing["_id"]} if existing and "_id" in existing else {"call_uuid": call_uuid}
             is_en = str(language).strip().lower() == "english"
             if is_en:
                 set_fields: Dict[str, Any] = {
@@ -518,7 +538,7 @@ def save_manual_transcript(call_uuid: str, turns: List[Dict[str, Any]], language
                     "manual_transcribed_en_at": now_iso(),
                     "updated_at": now_iso(),
                 }
-                col.update_one({"call_uuid": call_uuid}, {"$set": set_fields}, upsert=True)
+                col.update_one(match_query, {"$set": set_fields}, upsert=True)
             else:
                 set_fields = {
                     "manual_transcripts": turns,
@@ -529,7 +549,7 @@ def save_manual_transcript(call_uuid: str, turns: List[Dict[str, Any]], language
                 update_op: Dict[str, Any] = {"$set": set_fields}
                 if clear_english:
                     update_op["$unset"] = {"manual_transcripts_en": "", "has_english_transcript": ""}
-                col.update_one({"call_uuid": call_uuid}, update_op, upsert=True)
+                col.update_one(match_query, update_op, upsert=True)
         except Exception as exc:
             logger.error(f"Failed to save manual transcript for {call_uuid}: {exc}")
 
@@ -938,10 +958,12 @@ def get_call(call_uuid: str) -> Optional[Dict[str, Any]]:
     col = get_collection()
     if col is not None:
         try:
-            doc = col.find_one({"call_uuid": call_uuid}, {"_id": 0})
+            doc = find_call_doc(call_uuid, {"_id": 0})
             if doc:
                 manual_turns = doc.get("manual_transcripts") or []
                 english_turns = doc.get("manual_transcripts_en") or []
+                doc["has_manual_transcript"] = bool(manual_turns) or bool(doc.get("has_manual_transcript"))
+                doc["has_english_transcript"] = bool(english_turns) or bool(doc.get("has_english_transcript"))
                 if is_transcript_enabled():
                     doc["turns"] = doc.get("transcripts") or manual_turns
                     doc["english_turns"] = english_turns

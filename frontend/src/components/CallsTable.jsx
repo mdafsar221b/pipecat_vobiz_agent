@@ -100,6 +100,7 @@ export default function CallsTable({
             ? { ...prev, manual_transcripts_en: turns, english_turns: turns, has_english_transcript: true }
             : prev
         );
+        onCallUpdated?.(uuid, { has_english_transcript: true, english_turns: turns, manual_transcripts_en: turns });
       } else {
         setTranscriptOverrides((prev) => ({ ...prev, [uuid]: turns }));
         if (force) {
@@ -120,6 +121,7 @@ export default function CallsTable({
               }
             : prev
         );
+        onCallUpdated?.(uuid, { has_manual_transcript: true, manual_transcripts: turns, turns });
       }
     } catch (err) {
       setTranscribeError(err.message || 'Failed to transcribe call audio');
@@ -155,15 +157,29 @@ export default function CallsTable({
   };
 
   const handleOpenInspect = async (callWithOverrides, { autoTranscribe = false } = {}) => {
+    const uuid = callWithOverrides.call_uuid || callWithOverrides.callId || callWithOverrides.uuid;
+    const cachedOrig = uuid ? transcriptOverrides[uuid] : undefined;
+    const cachedEn = uuid ? englishOverrides[uuid] : undefined;
+
     setInspectingCall(callWithOverrides);
-    setTranscriptLang('original');
     setTranscribeError('');
     if (autoTranscribe) {
       setActiveDrawerTab('transcript');
     }
-    const uuid = callWithOverrides.call_uuid || callWithOverrides.callId || callWithOverrides.uuid;
+
     let resolvedCall = callWithOverrides;
-    if (uuid && (!callWithOverrides.turns?.length && !callWithOverrides.transcripts?.length && !callWithOverrides.manual_transcripts?.length)) {
+    const hasLocalOrig = Boolean(
+      (cachedOrig && cachedOrig.length > 0) ||
+      callWithOverrides.manual_transcripts?.length ||
+      (transcriptEnabled && (callWithOverrides.transcripts?.length || callWithOverrides.turns?.length))
+    );
+    const hasLocalEn = Boolean(
+      (cachedEn && cachedEn.length > 0) ||
+      callWithOverrides.manual_transcripts_en?.length ||
+      callWithOverrides.english_turns?.length
+    );
+
+    if (uuid && !hasLocalOrig && !hasLocalEn) {
       setIsLoadingDetail(true);
       try {
         const res = await fetch(`/api/calls/${encodeURIComponent(uuid)}`);
@@ -171,6 +187,14 @@ export default function CallsTable({
           const data = await res.json();
           if (data.ok && data.call) {
             resolvedCall = { ...callWithOverrides, ...data.call };
+            const fetchedOrig = data.call.manual_transcripts || data.call.turns || [];
+            const fetchedEn = data.call.manual_transcripts_en || data.call.english_turns || [];
+            if (fetchedOrig.length > 0) {
+              setTranscriptOverrides((prev) => ({ ...prev, [uuid]: fetchedOrig }));
+            }
+            if (fetchedEn.length > 0) {
+              setEnglishOverrides((prev) => ({ ...prev, [uuid]: fetchedEn }));
+            }
             setInspectingCall((prev) => (prev && (prev.call_uuid === uuid || prev.callId === uuid) ? { ...prev, ...data.call } : prev));
           }
         }
@@ -180,14 +204,26 @@ export default function CallsTable({
         setIsLoadingDetail(false);
       }
     }
-    if (autoTranscribe && uuid) {
-      const existing =
-        transcriptOverrides[uuid] ||
-        resolvedCall.manual_transcripts ||
-        (transcriptEnabled ? (resolvedCall.transcripts || resolvedCall.turns) : (resolvedCall.has_manual_transcript ? resolvedCall.turns : []));
-      if (!existing || existing.length === 0) {
-        handleTranscribeCall(resolvedCall, false);
-      }
+
+    const finalOrig =
+      (uuid && transcriptOverrides[uuid]) ||
+      resolvedCall.manual_transcripts ||
+      (transcriptEnabled ? (resolvedCall.transcripts || resolvedCall.turns) : (resolvedCall.has_manual_transcript ? resolvedCall.turns : [])) ||
+      [];
+    const finalEn =
+      (uuid && englishOverrides[uuid]) ||
+      resolvedCall.english_turns ||
+      resolvedCall.manual_transcripts_en ||
+      [];
+
+    if (finalOrig.length === 0 && finalEn.length > 0) {
+      setTranscriptLang('english');
+    } else {
+      setTranscriptLang('original');
+    }
+
+    if (autoTranscribe && uuid && finalOrig.length === 0 && finalEn.length === 0) {
+      handleTranscribeCall(resolvedCall, false, 'original');
     }
   };
 
@@ -858,7 +894,12 @@ export default function CallsTable({
                           </div>
                         </div>
                       )}
-                      {isTranscribingThis ? (
+                      {isLoadingDetail ? (
+                        <div className="text-center py-14 text-muted-foreground">
+                          <RefreshCw className="w-6 h-6 animate-spin text-[#008792] mx-auto mb-2" />
+                          <p className="text-xs font-medium text-foreground">Loading saved call details...</p>
+                        </div>
+                      ) : isTranscribingThis ? (
                         <div className="text-center py-16 text-muted-foreground">
                           <RefreshCw className="w-7 h-7 animate-spin text-[#008792] mx-auto mb-2.5" />
                           <p className="text-xs font-semibold text-foreground">

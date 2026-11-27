@@ -181,16 +181,16 @@ def detect_audio_mime_type(audio_bytes: bytes, content_type: str = "") -> str:
         return clean_ct
     return "audio/mpeg"
 
-# Shared Gemini JSON generation helper with model fallback, 503 retry, and API key rotation
+# Shared Gemini JSON generation helper with model fallback, fast timeout, minimal thinking, and API key rotation
 async def _call_gemini_json_with_fallback(contents: List[Any], op_label: str = "transcription") -> Any:
     if not GEMINI_API_KEYS:
         raise ValueError("No Gemini API keys configured in environment.")
 
-    primary_model = os.getenv("GEMINI_TRANSCRIBE_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
+    primary_model = os.getenv("GEMINI_TRANSCRIBE_MODEL", "gemini-3.5-flash-lite").strip() or "gemini-3.5-flash-lite"
     candidate_models = [primary_model]
     for fallback_model in (
-        "gemini-3.8-flash",
         "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash",
     ):
@@ -203,22 +203,33 @@ async def _call_gemini_json_with_fallback(contents: List[Any], op_label: str = "
         max_attempts = max(1, len(GEMINI_API_KEYS))
         transient_retries = 0
         attempt = 0
+        use_thinking_minimal = True
         while attempt < max_attempts:
             api_key = get_gemini_api_key()
+            t0 = time.perf_counter()
             try:
                 def _run_sync() -> str:
-                    client = Client(api_key=api_key)
+                    client = Client(
+                        api_key=api_key,
+                        http_options=types.HttpOptions(timeout=25000),
+                    )
+                    cfg_kwargs: Dict[str, Any] = {
+                        "temperature": 0.1,
+                        "response_mime_type": "application/json",
+                    }
+                    if use_thinking_minimal:
+                        cfg_kwargs["thinking_config"] = types.ThinkingConfig(
+                            thinking_level=types.ThinkingLevel.MINIMAL
+                        )
                     resp = client.models.generate_content(
                         model=model_name,
                         contents=contents,
-                        config=types.GenerateContentConfig(
-                            temperature=0.1,
-                            response_mime_type="application/json",
-                        ),
+                        config=types.GenerateContentConfig(**cfg_kwargs),
                     )
                     return resp.text or "[]"
 
-                raw_text = await asyncio.to_thread(_run_sync)
+                raw_text = await asyncio.wait_for(asyncio.to_thread(_run_sync), timeout=28.0)
+                logger.info(f"Gemini {op_label} succeeded with {model_name} in {time.perf_counter() - t0:.2f}s")
                 cleaned = raw_text.strip()
                 if cleaned.startswith("```"):
                     cleaned = cleaned.strip("`")
@@ -228,6 +239,9 @@ async def _call_gemini_json_with_fallback(contents: List[Any], op_label: str = "
             except Exception as exc:
                 last_error = exc
                 err_str = str(exc).lower()
+                if use_thinking_minimal and ("thinking" in err_str or "invalid_argument" in err_str):
+                    use_thinking_minimal = False
+                    continue
                 is_quota_or_auth = any(m in err_str for m in [
                     "429", "resource_exhausted", "quota", "403", "permission_denied", "unauthenticated"
                 ])
@@ -235,8 +249,8 @@ async def _call_gemini_json_with_fallback(contents: List[Any], op_label: str = "
                     rotate_gemini_api_key(f"On-demand {op_label} quota/auth error: {exc}")
                     attempt += 1
                     continue
-                is_transient = any(m in err_str for m in [
-                    "503", "unavailable", "high demand", "overloaded", "500", "internal", "timeout", "try again"
+                is_transient = isinstance(exc, asyncio.TimeoutError) or any(m in err_str for m in [
+                    "503", "unavailable", "high demand", "overloaded", "500", "internal", "timeout", "timed out", "try again"
                 ])
                 if is_transient:
                     if is_last_model and transient_retries < 1:
@@ -244,7 +258,7 @@ async def _call_gemini_json_with_fallback(contents: List[Any], op_label: str = "
                         logger.warning(f"Gemini {op_label} model {model_name} temporarily unavailable ({exc}); retrying in 1.5s")
                         await asyncio.sleep(1.5)
                         continue
-                    logger.warning(f"Gemini {op_label} model {model_name} overloaded/unavailable ({exc}); trying fallback model")
+                    logger.warning(f"Gemini {op_label} model {model_name} slow/overloaded ({exc}); switching to next model")
                     break
                 is_model_error = any(m in err_str for m in ["404", "not_found", "not found", "unsupported"])
                 if is_model_error:
